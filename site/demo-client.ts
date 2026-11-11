@@ -65,6 +65,7 @@ function message(partial: Partial<TimelineMessage> & Pick<TimelineMessage, "kind
     authorId: null,
     from: null,
     to: [],
+    cc: [],
     fullText: null,
     html: null,
     deliveryStatus: partial.kind === "outbound" ? "delivered" : null,
@@ -258,6 +259,23 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
     return a ? { id: a.id, name: a.name } : null;
   };
   const agent = (id: string | null) => AGENTS.find((a) => a.id === id) ?? null;
+  /** Like the service: whoever wrote last (else the contact), copying everyone else on the latest email. */
+  const recipients = (t: Ticket): TicketDetail["recipients"] => {
+    const thread = s.messages.get(t.id)!.filter((m) => m.kind !== "note" && !m.auto);
+    const lastIn = [...thread].reverse().find((m) => m.kind === "inbound");
+    const identity = t.contact.identities[0];
+    const to = lastIn?.from ?? (identity ? { address: identity.value, name: t.contact.name } : null);
+    const latest = thread.at(-1);
+    if (!to || !latest || t.channel !== "email") return { to, cc: [] };
+    const own = (x: string) => x.endsWith("@acme.com");
+    const seen = new Set([to.address.toLowerCase()]);
+    const cc = [latest.from, ...latest.to, ...latest.cc].filter((x): x is NonNullable<typeof x> => {
+      if (!x || own(x.address) || seen.has(x.address.toLowerCase())) return false;
+      seen.add(x.address.toLowerCase());
+      return true;
+    });
+    return { to, cc };
+  };
   const event = (ticketId: string, type: TimelineEvent["type"], data: Record<string, unknown>) =>
     s.events.get(ticketId)!.push({ id: nextId("evt"), type, actorId: VIEWER.id, data, createdAt: new Date() });
 
@@ -360,13 +378,14 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
         timeline,
         channel: CHANNELS[t.channel],
         replyBlockedReason: null,
+        recipients: recipients(t),
         previousTickets: s.tickets
           .filter((x) => x.id !== t.id && x.contact.identities[0]?.value === t.contact.identities[0]?.value)
           .map((x) => ({ id: x.id, number: x.number, subject: x.subject, status: x.status, lastMessageAt: x.lastMessageAt })),
       });
     },
 
-    async reply({ ticketId, text, attachmentIds, status }) {
+    async reply({ ticketId, text, attachmentIds, status, cc }) {
       const t = ticket(ticketId);
       const at = new Date();
       s.messages.get(ticketId)!.push(
@@ -375,7 +394,8 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
           text,
           createdAt: at,
           authorId: VIEWER.id,
-          to: [{ address: t.contact.identities[0]!.value, name: t.contact.name }],
+          to: recipients(t).to ? [recipients(t).to!] : [],
+          cc: cc ?? recipients(t).cc,
           attachments: attachmentIds.map((id) => s.files.get(id)!.info),
         })
       );
@@ -419,6 +439,15 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
       t.customerId = customerId;
       t.contact.customerId = customerId;
       event(ticketId, "customer_linked", { to: customerId });
+      return delay({ ok: true });
+    },
+
+    async changeContact({ ticketId, address }) {
+      const t = ticket(ticketId);
+      const value = address.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) throw new Error("Enter a valid email address.");
+      t.contact = { ...t.contact, id: nextId("contact"), name: null, identities: [{ kind: "email", value }] };
+      event(ticketId, "contact_changed", { address: value });
       return delay({ ok: true });
     },
 

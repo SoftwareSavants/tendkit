@@ -2,12 +2,12 @@
 
 import { useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Paperclip, X } from "lucide-react";
+import { Loader2, Paperclip, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useSupport } from "./provider";
-import type { FileInfo, TicketDetail } from "./client";
+import type { Address, FileInfo, TicketDetail } from "./client";
 import { contactLabel, formatBytes } from "./format";
 
 type Mode = "reply" | "note";
@@ -27,26 +27,36 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
   const limits = detail.channel?.capabilities;
   const maxLength = mode === "reply" ? limits?.maxTextLength ?? null : null;
   const attachmentsAllowed = mode === "note" || Boolean(limits?.attachments);
-  // Replies go to whoever wrote last, which can be a colleague of the original contact.
-  const lastInbound = [...detail.timeline]
-    .reverse()
-    .find((e) => e.type === "message" && e.message.kind === "inbound" && e.message.source === "channel");
-  const recipient =
-    lastInbound?.type === "message" && lastInbound.message.from
-      ? lastInbound.message.from.name || lastInbound.message.from.address
-      : contactLabel(detail.contact);
+  const to = detail.recipients.to;
+  const recipient = to ? to.name || to.address : contactLabel(detail.contact);
+  const isEmail = detail.channel?.kind === "email";
+  // null until the agent changes who's copied; the server's default applies until then.
+  const [ccEdit, setCcEdit] = useState<Address[] | null>(null);
+  const cc = ccEdit ?? detail.recipients.cc;
+  const [ccDraft, setCcDraft] = useState<string | null>(null);
+
+  const addCc = () => {
+    const value = (ccDraft ?? "").trim();
+    if (!value) return setCcDraft(null);
+    if (!EMAIL.test(value)) return setError(t("composer.invalidCc", { address: value }));
+    setError(null);
+    const known = value.toLowerCase();
+    if (!cc.some((a) => a.address.toLowerCase() === known) && known !== to?.address.toLowerCase()) setCcEdit([...cc, { address: value }]);
+    setCcDraft(null);
+  };
 
   const send = useMutation({
     mutationFn: (status: "waiting" | "solved" | null) => {
       const attachmentIds = files.map((f) => f.id);
       return mode === "note"
         ? client.addNote({ ticketId, text, attachmentIds })
-        : client.reply({ ticketId, text, attachmentIds, status: status ?? "waiting" });
+        : client.reply({ ticketId, text, attachmentIds, status: status ?? "waiting", ...(ccEdit ? { cc: ccEdit } : {}) });
     },
     onSuccess: () => {
       setText("");
       setFiles([]);
       setError(null);
+      setCcEdit(null);
     },
     onError: (e) => setError(e instanceof Error && e.message ? e.message : t("errors.send")),
     onSettled: () => {
@@ -105,9 +115,59 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
       ) : (
         <>
           {mode === "reply" && (
-            <p className="px-4 pt-3 text-xs text-muted-foreground">
-              {t("composer.to")} <bdi className="text-foreground">{recipient}</bdi>
-            </p>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pt-3 text-xs text-muted-foreground">
+              <span>
+                {t("composer.to")} <bdi className="text-foreground">{recipient}</bdi>
+              </span>
+              {isEmail && (
+                <span className="flex flex-wrap items-center gap-1.5">
+                  {(cc.length > 0 || ccDraft !== null) && <span>{t("composer.cc")}</span>}
+                  {cc.map((a) => (
+                    <span key={a.address} className="inline-flex items-center gap-1 rounded-md border bg-background px-1.5 py-0.5 text-foreground">
+                      <bdi title={a.address}>{a.name || a.address}</bdi>
+                      <button
+                        type="button"
+                        onClick={() => setCcEdit(cc.filter((c) => c.address !== a.address))}
+                        className="text-muted-foreground hover:text-foreground"
+                        aria-label={t("composer.removeCc", { name: a.name || a.address })}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                  {ccDraft !== null ? (
+                    <input
+                      autoFocus
+                      type="email"
+                      dir="ltr"
+                      value={ccDraft}
+                      onChange={(e) => setCcDraft(e.target.value)}
+                      onBlur={addCc}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === "," || e.key === " ") {
+                          e.preventDefault();
+                          addCc();
+                        } else if (e.key === "Escape") {
+                          setCcDraft(null);
+                        }
+                      }}
+                      placeholder={t("composer.ccPlaceholder")}
+                      aria-label={t("composer.addCc")}
+                      className="h-6 w-48 rounded-md border bg-background px-1.5 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => setCcDraft("")}
+                      className="inline-flex items-center gap-0.5 hover:text-foreground"
+                    >
+                      <Plus className="size-3" />
+                      {cc.length ? <span className="sr-only">{t("composer.addCc")}</span> : t("composer.cc")}
+                    </button>
+                  )}
+                </span>
+              )}
+            </div>
           )}
           <Textarea
             value={text}
@@ -183,3 +243,5 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
     </div>
   );
 }
+
+const EMAIL = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;

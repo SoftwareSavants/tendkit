@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { htmlToText, signatureFromHtml, visibleReply, withoutSignature } from "../registry/support/text";
+import { htmlToText, quotedMessage, signatureFromHtml, visibleReply, withoutSignature } from "../registry/support/text";
 
 /** What Outlook on the web sends for a reply: body, signature div, then the quoted message. */
 const outlookWebHtml = `<html><head><style>p{margin:0}</style></head><body dir="ltr">
@@ -80,5 +80,51 @@ describe("signatures", () => {
 describe("htmlToText", () => {
   it("keeps the signature text so the trimmed reply can be compared against it", () => {
     expect(htmlToText(outlookWebHtml)).toContain("Support lead, Acme");
+  });
+});
+
+describe("quotedMessage", () => {
+  it("reads Outlook's header block, in French too", () => {
+    const quote = quotedMessage(
+      ["Je transmets à l'équipe.", "", "De : Emma Clarke <emma@northwind.test>", "Envoyé : lundi 2 novembre 2026 16:23", "À : Daniel Kim <daniel@acme.test>", "Objet : Virement", "", "Bonjour,", "", "Le virement n'est pas arrivé."].join("\n")
+    );
+    expect(quote).toMatchObject({
+      from: { address: "emma@northwind.test", name: "Emma Clarke" },
+      text: "Bonjour,\n\nLe virement n'est pas arrivé.",
+      before: "Je transmets à l'équipe.",
+    });
+  });
+
+  it("reads Gmail's attribution, wrapped onto two lines, and unquotes the body", () => {
+    const quote = quotedMessage(
+      ["Looping in support.", "", "On Mon, Nov 2, 2026 at 4:23 PM Emma Clarke <emma@northwind.test>", "wrote:", "", "> Where is my payout?", ">", "> Emma"].join("\n")
+    );
+    expect(quote).toMatchObject({ from: { address: "emma@northwind.test", name: "Emma Clarke" }, text: "Where is my payout?\n\nEmma" });
+    expect(quote!.sentAt?.toISOString()).toBe(new Date("Mon, Nov 2, 2026 4:23 PM").toISOString());
+  });
+
+  it("reads Apple Mail's forward and keeps only the newest quoted email", () => {
+    const quote = quotedMessage(
+      [
+        "Begin forwarded message:",
+        "",
+        "From: Lucas Martin <lucas@lumen.test>",
+        "Subject: Invoice",
+        "Date: 2 November 2026 at 10:15:00 GMT",
+        "To: Priya <priya@acme.test>",
+        "",
+        "Still waiting on this.",
+        "",
+        "On Fri, Oct 30, 2026 at 9:00 AM Priya <priya@acme.test> wrote:",
+        "> We'll send it Monday.",
+      ].join("\n")
+    );
+    expect(quote).toMatchObject({ from: { address: "lucas@lumen.test" }, text: "Still waiting on this.", before: "" });
+  });
+
+  it("returns null without a quote, or when the quoted sender has no address", () => {
+    expect(quotedMessage("Just a question about payouts.")).toBeNull();
+    expect(quotedMessage(outlookWebText)).toMatchObject({ from: { address: "support@acme.test" } });
+    expect(quotedMessage("Hi\n\nFrom: Daniel Kim\nSent: Monday\nTo: Emma\nSubject: Hi\n\nBody")).toBeNull();
   });
 });

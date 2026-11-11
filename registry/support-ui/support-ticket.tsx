@@ -23,6 +23,7 @@ import { contactLabel, formatTimestamp, formatWhen } from "./format";
 import { AgentAvatar, AttachmentChip, EmailFrame, MessageText, StatusBadge, UnknownSenderBadge } from "./parts";
 import { SupportComposer } from "./support-composer";
 import { LinkCustomerDialog } from "./link-customer-dialog";
+import { ChangeContactDialog } from "./change-contact-dialog";
 
 /** One ticket: the conversation, the reply box, and the customer next to it. */
 export function SupportTicket({ ticketId }: { ticketId: string }) {
@@ -245,6 +246,12 @@ function describeEvent(event: TimelineEvent, t: ReturnType<typeof useSupport>["t
       return t("ticket.events.reopened");
     case "follow_up":
       return t("ticket.events.followUp", { number: String(event.data.number) });
+    case "contact_changed":
+      return t("ticket.events.contactChanged", { actor, address: String(event.data.address ?? "") });
+    case "forwarded": {
+      const from = event.data.from as { address: string; name?: string | null } | undefined;
+      return t("ticket.events.forwarded", { actor: agentName(event.actorId) ?? from?.name ?? from?.address ?? actor });
+    }
     default:
       return event.type;
   }
@@ -344,12 +351,23 @@ function MessageCard({
 function CustomerSidebar({ detail }: { detail: TicketDetail }) {
   const { t, locale, customerPanel, ticketHref } = useSupport();
   const [linking, setLinking] = useState(false);
+  const [changing, setChanging] = useState(false);
 
   return (
     <aside className="space-y-4 lg:sticky lg:top-6">
       {customerPanel?.(detail)}
       <section className="rounded-xl border bg-card p-4">
-        <h2 className="text-xs font-medium text-muted-foreground">{t("ticket.contact")}</h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="text-xs font-medium text-muted-foreground">{t("ticket.contact")}</h2>
+          <button
+            type="button"
+            onClick={() => setChanging(true)}
+            className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          >
+            {t("ticket.changeContact")}
+          </button>
+          <ChangeContactDialog detail={detail} open={changing} onOpenChange={setChanging} />
+        </div>
         <p className="mt-2 text-sm font-medium">
           <bdi>{contactLabel(detail.contact)}</bdi>
         </p>

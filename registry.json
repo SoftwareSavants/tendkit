@@ -326,6 +326,11 @@
           "target": "~/components/support/link-customer-dialog.tsx"
         },
         {
+          "path": "registry/support-ui/change-contact-dialog.tsx",
+          "type": "registry:file",
+          "target": "~/components/support/change-contact-dialog.tsx"
+        },
+        {
           "path": "registry/support-ui/support-requests.tsx",
           "type": "registry:file",
           "target": "~/components/support/support-requests.tsx"

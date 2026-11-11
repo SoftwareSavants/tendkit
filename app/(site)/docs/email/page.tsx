@@ -15,6 +15,8 @@ export default function Email() {
       toc={[
         { id: "keep-your-mailbox", title: "Keep your mailbox" },
         { id: "threading", title: "Threading" },
+        { id: "copies", title: "Copies" },
+        { id: "team-email", title: "Email from your team" },
         { id: "what-the-ticket-shows", title: "What the ticket shows" },
         { id: "automatic-mail", title: "Automatic mail" },
         { id: "authentication", title: "Sender authentication" },
@@ -67,8 +69,47 @@ export default function Email() {
         <li>for SMS, WhatsApp and Telegram, it comes from the same person on the same channel.</li>
       </ul>
       <p>
+        The sender must be the ticket&apos;s contact, someone at the same customer, or someone already on the conversation
+        (copied on one of its emails). Anyone else opens a new ticket.
+      </p>
+      <p>
         A reply to a solved ticket reopens it within <code>reopenWindowDays</code> (14 by default); after that it opens a
         new ticket that links back.
+      </p>
+
+      <H2 id="copies">Copies</H2>
+      <p>
+        A reply goes to whoever wrote last and copies everyone else on the latest email, minus your own addresses and your
+        team. Agents can remove or add people in the composer before sending, and the next reply keeps their list. Set{" "}
+        <code>replyAll: false</code> to send to the customer alone by default.
+      </p>
+
+      <H2 id="team-email">Email from your team</H2>
+      <p>
+        Your team is your agents&apos; email addresses (from <code>listAgents</code>), plus any addresses and domains in the{" "}
+        <code>team</code> option. With <code>teamEmail: &quot;loop-in&quot;</code>, the default, a teammate can hand a
+        conversation to the inbox from their own mailbox:
+      </p>
+      <ul>
+        <li>
+          <strong>Reply to a customer and add the support address.</strong> The customer becomes the ticket&apos;s contact.
+          Their email, read from the quote, and the teammate&apos;s reply both appear on the ticket. Nothing is sent: the
+          teammate&apos;s mail client already delivered it.
+        </li>
+        <li>
+          <strong>Forward a customer&apos;s email to the support address.</strong> The forwarded email&apos;s sender
+          becomes the contact, and what the teammate wrote above it becomes an internal note.
+        </li>
+        <li>
+          <strong>Reply on an existing ticket.</strong> An email to the customer is recorded as the teammate&apos;s reply;
+          one to the support address alone becomes an internal note.
+        </li>
+      </ul>
+      <p>
+        Quotes are read from Outlook&apos;s From/Sent block, Gmail&apos;s &quot;On … wrote:&quot; line and Apple
+        Mail&apos;s forwards. A hand-off gets no acknowledgement. Team mail that fails authentication is handled like
+        anyone else&apos;s, and <code>teamEmail: &quot;customer&quot;</code> turns this off. When a ticket still ends up
+        under the wrong person, <strong>Change contact</strong> on the ticket moves it.
       </p>
 
       <H2 id="what-the-ticket-shows">What the ticket shows</H2>

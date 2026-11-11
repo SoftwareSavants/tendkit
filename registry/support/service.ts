@@ -11,6 +11,7 @@ import {
   automatedReason,
   senderFailedAuthentication,
   htmlToText,
+  quotedMessage,
   signatureFromHtml,
   snippet,
   textToHtml,
@@ -81,6 +82,29 @@ export type SupportOptions = {
    * alerts from. Without this, an alert sent to a mailbox that copies into the inbox opens a ticket.
    */
   ignoreFrom?: string[];
+  /**
+   * Who counts as your team. Your agents' emails (from `directory.listAgents`) always do; add
+   * shared mailboxes or whole domains here. Mail from these addresses only counts as your team's
+   * when it passes authentication.
+   */
+  team?: { addresses?: string[]; domains?: string[] };
+  /**
+   * What happens to email your team sends to the support address.
+   * "loop-in" (the default): a teammate who adds the support address to an email they write to a
+   * customer, or forwards a customer's email to it, hands the conversation to the inbox. The
+   * customer becomes the ticket's contact, the customer's email (read from the quote) and the
+   * teammate's message both appear on the ticket, and nothing is sent to the customer. On an
+   * existing ticket, a teammate's email to the customer is recorded as their reply, and one to
+   * the support address alone as an internal note.
+   * "customer": your team's email is handled like anyone else's.
+   */
+  teamEmail?: "loop-in" | "customer";
+  /**
+   * Replies copy everyone else on the conversation's latest email, minus your own addresses
+   * and your team (true, the default), or go to the customer alone (false). Agents can change
+   * the copy list on each reply.
+   */
+  replyAll?: boolean;
   /** The channel that tickets opened from your own app (a portal, a contact form) reply on. */
   portalChannelId?: string;
   /** Days after solving during which a customer reply reopens the ticket. Later replies start a new one. */
@@ -112,6 +136,8 @@ export type TicketDetail = {
   channel: { id: string; kind: Channel["kind"]; address: string; capabilities: Channel["capabilities"] } | null;
   /** Why a reply can't be sent right now, or null when it can. */
   replyBlockedReason: "reply_window_closed" | "no_channel" | "no_recipient" | null;
+  /** Who a reply goes to by default. Agents can change `cc` when they reply. */
+  recipients: { to: Address | null; cc: Address[] };
   previousTickets: Pick<Ticket, "id" | "number" | "subject" | "status" | "lastMessageAt">[];
 };
 
@@ -177,6 +203,25 @@ export function createSupport(options: SupportOptions) {
 
   const agentsById = async () => new Map((await directory.listAgents()).map((a) => [a.id, a]));
 
+  const teamAddresses = new Set((options.team?.addresses ?? []).map((a) => a.trim().toLowerCase()));
+  const teamDomains = (options.team?.domains ?? []).map((d) => d.trim().toLowerCase().replace(/^@/, ""));
+  /** Tells your team's addresses apart from customers', and which agent an address belongs to. */
+  async function teamDirectory() {
+    const agents = await directory.listAgents().catch((error) => {
+      log("warn", "directory.listAgents failed", { error: String(error) });
+      return [] as Agent[];
+    });
+    const byEmail = new Map(agents.filter((a) => a.email).map((a) => [a.email!.trim().toLowerCase(), a]));
+    return {
+      agentFor: (address: string) => byEmail.get(address.trim().toLowerCase()) ?? null,
+      isTeam(address: string) {
+        const lower = address.trim().toLowerCase();
+        return byEmail.has(lower) || teamAddresses.has(lower) || teamDomains.some((d) => lower.endsWith(`@${d}`));
+      },
+    };
+  }
+  type Team = Awaited<ReturnType<typeof teamDirectory>>;
+
   // ---------------------------------------------------------------- inbound
 
   /**
@@ -218,17 +263,27 @@ export function createSupport(options: SupportOptions) {
     });
   }
 
-  /** A ticket may only receive a message from its own contact or a colleague at the same customer. */
-  const belongsTo = (ticket: Ticket | null, contact: Contact) =>
-    ticket && (ticket.contactId === contact.id || (ticket.customerId !== null && ticket.customerId === contact.customerId))
-      ? ticket
-      : null;
+  /**
+   * A ticket may only receive a message from its own contact, a colleague at the same customer,
+   * someone already on the conversation (copied on one of its emails), or your team (`contact`
+   * null).
+   */
+  async function belongsTo(ticket: Ticket | null, contact: Contact | null, address: string): Promise<Ticket | null> {
+    if (!ticket) return null;
+    if (!contact) return ticket;
+    if (ticket.contactId === contact.id || (ticket.customerId !== null && ticket.customerId === contact.customerId)) return ticket;
+    const lower = address.toLowerCase();
+    const messages = await store.listMessages(ticket.id, { includeNotes: false });
+    const onThread = messages.some((m) => [m.from, ...m.to, ...m.cc].some((a) => a?.address.toLowerCase() === lower));
+    return onThread ? ticket : null;
+  }
 
-  async function findThread(ch: Channel, msg: InboundMessage, contact: Contact, trusted: boolean): Promise<Ticket | null> {
+  async function findThread(ch: Channel, msg: InboundMessage, contact: Contact | null, trusted: boolean): Promise<Ticket | null> {
+    const sender = msg.from.address;
     for (const address of [...msg.to, ...(msg.cc ?? [])]) {
       const token = tokenFromAddress(address.address);
       if (token) {
-        const ticket = belongsTo(await store.findTicketByToken(token), contact);
+        const ticket = await belongsTo(await store.findTicketByToken(token), contact, sender);
         if (ticket) return ticket;
       }
     }
@@ -236,14 +291,14 @@ export function createSupport(options: SupportOptions) {
     if (!trusted) return null;
     const ids = [...(msg.references ?? []), msg.inReplyTo].filter((id): id is string => Boolean(id));
     if (ids.length) {
-      const ticket = belongsTo(await store.findTicketByRfcMessageIds(ids), contact);
+      const ticket = await belongsTo(await store.findTicketByRfcMessageIds(ids), contact, sender);
       if (ticket) return ticket;
     }
     if (msg.providerThreadId) {
-      const ticket = belongsTo(await store.findTicketByProviderThread(ch.id, msg.providerThreadId), contact);
+      const ticket = await belongsTo(await store.findTicketByProviderThread(ch.id, msg.providerThreadId), contact, sender);
       if (ticket) return ticket;
     }
-    if (ch.capabilities.conversation === "contact") return store.findLatestTicket(ch.id, contact.id);
+    if (contact && ch.capabilities.conversation === "contact") return store.findLatestTicket(ch.id, contact.id);
     return null;
   }
 
@@ -282,6 +337,12 @@ export function createSupport(options: SupportOptions) {
       (ids.length ? await store.findTicketByRfcMessageIds(ids) : null) ??
       (msg.providerThreadId ? await store.findTicketByProviderThread(ch.id, msg.providerThreadId) : null);
     if (!ticket) return { result: "ignored" as const };
+    const author = (await teamDirectory()).agentFor(msg.from.address);
+    return recordSentElsewhere(ch, ticket, msg, author?.id ?? null);
+  }
+
+  /** An email your team sent the customer outside the inbox (their mailbox, Outlook): recorded, never resent. */
+  async function recordSentElsewhere(ch: Channel, ticket: Ticket, msg: InboundMessage, authorId: string | null) {
     // A reply sent from here can show up in the mailbox's Sent folder before its send finished
     // recording; the shared Message-ID tells us it's the same message.
     if (msg.rfcMessageId) {
@@ -290,41 +351,202 @@ export function createSupport(options: SupportOptions) {
         return { result: "duplicate" as const };
       }
     }
-    const text = msg.text ?? (msg.html ? htmlToText(msg.html) : "");
+    const text = msg.text?.trim() ? msg.text : msg.html ? htmlToText(msg.html) : "";
     const at = msg.receivedAt;
     const inserted = await store.insertMessage({
+      ...emailFields(ch, msg),
       ticketId: ticket.id,
       kind: "outbound",
-      channelId: ch.id,
-      authorId: null,
-      from: msg.from,
-      to: msg.to,
-      cc: msg.cc ?? [],
-      subject: msg.subject ?? null,
+      authorId,
       text: withoutSignature(visibleReply(text), signatureFromHtml(msg.html)),
       fullText: text,
-      html: msg.html ?? null,
-      rfcMessageId: msg.rfcMessageId ?? null,
-      inReplyTo: msg.inReplyTo ?? null,
-      references: msg.references ?? [],
-      providerMessageId: msg.providerMessageId,
       deliveryStatus: "sent",
-      deliveryError: null,
-      auto: false,
       source: "agent",
-      createdAt: at,
     });
     if (!inserted) return { result: "duplicate" as const };
+    await saveInboundAttachments(ticket.id, inserted.id, msg);
     await store.updateTicket(ticket.id, {
       waitingSince: null,
       lastOutboundAt: at,
       lastMessageAt: at > ticket.lastMessageAt ? at : ticket.lastMessageAt,
       preview: snippet(inserted.text),
       previewKind: "outbound",
-      previewAuthorId: null,
+      previewAuthorId: authorId,
       ...(ticket.status === "open" ? { status: "waiting" as const } : {}),
     });
     return { result: "recorded" as const, ticketId: ticket.id };
+  }
+
+  /** The columns every message copied from an email shares. */
+  function emailFields(ch: Channel, msg: InboundMessage) {
+    return {
+      channelId: ch.id,
+      from: msg.from,
+      to: msg.to,
+      cc: msg.cc ?? [],
+      subject: msg.subject ?? null,
+      html: msg.html ?? null,
+      rfcMessageId: msg.rfcMessageId ?? null,
+      inReplyTo: msg.inReplyTo ?? null,
+      references: msg.references ?? [],
+      providerMessageId: msg.providerMessageId,
+      deliveryStatus: null,
+      deliveryError: null,
+      auto: false,
+      source: "channel" as Message["source"],
+      createdAt: msg.receivedAt,
+    };
+  }
+
+  /**
+   * Email from your team (see `teamEmail`). Returns null when it isn't a hand-off, so it's
+   * handled like anyone else's: a teammate asking support something themselves.
+   */
+  async function ingestTeamMessage(ch: Channel, msg: InboundMessage, team: Team) {
+    const author = team.agentFor(msg.from.address);
+    const authorId = author?.id ?? null;
+    const isCustomer = (address: string) => !isOwnAddress(address) && !team.isTeam(address);
+    const customers = dedupeAddresses([...msg.to, ...(msg.cc ?? [])].filter((a) => isCustomer(a.address)));
+
+    const existing = await findThread(ch, msg, null, true);
+    if (existing) {
+      if (customers.length) return recordSentElsewhere(ch, existing, msg, authorId);
+      // Written to the support address alone: for the team, not the customer.
+      const fullText = (msg.text?.trim() ? msg.text : msg.html ? htmlToText(msg.html) : "").trim();
+      const note = await store.insertMessage({
+        ...emailFields(ch, msg),
+        ticketId: existing.id,
+        kind: "note",
+        authorId,
+        text: withoutSignature(visibleReply(fullText), signatureFromHtml(msg.html)),
+        fullText,
+        source: "agent",
+      });
+      if (!note) return { result: "duplicate" as const };
+      await saveInboundAttachments(existing.id, note.id, msg);
+      return { result: "appended" as const, ticketId: existing.id };
+    }
+
+    const quote = quotedMessage(msg.text, msg.html);
+    const quoted = quote && isCustomer(quote.from.address) ? quote : null;
+    // Written to the customer: they're the contact (the one quoted, if they're on it). Written
+    // to the support address alone: a forward, and the forwarded email's sender is the contact.
+    const requester = customers.length
+      ? customers.find((c) => c.address.toLowerCase() === quoted?.from.address) ?? customers[0]!
+      : quoted?.from ?? null;
+    if (!requester) return null;
+    const forwarded = !customers.length;
+
+    // Your teammate vouches for the address, so it may link to the customer's account.
+    const contact = await resolveContact(
+      normalizeIdentity(ch.identityKind, requester.address),
+      requester.name ?? (quoted?.from.address === requester.address.toLowerCase() ? quoted.from.name : null),
+      true
+    );
+    const at = msg.receivedAt;
+    const own = withoutSignature(quote ? quote.before : visibleReply(msg.text ?? htmlToText(msg.html ?? "")), signatureFromHtml(msg.html));
+    const fullText = (msg.text?.trim() ? msg.text : msg.html ? htmlToText(msg.html) : "").trim();
+    // The quoted email's own date when it's believable; otherwise just before the teammate's.
+    const quotedAt =
+      quoted?.sentAt && quoted.sentAt < at && at.getTime() - quoted.sentAt.getTime() < 365 * DAY ? quoted.sentAt : new Date(at.getTime() - 1);
+
+    let outcome: { ticket: Ticket; customerMessage: Message | null; teamMessage: Message | null };
+    try {
+      outcome = await store.transaction(async (tx) => {
+        let ticket = await tx.createTicket({
+          channelId: ch.id,
+          subject: baseSubject(msg.subject) || null,
+          status: quoted ? "open" : "waiting",
+          contactId: contact.id,
+          customerId: contact.customerId,
+          assigneeId: null,
+          replyToken: randomToken(),
+          providerThreadId: msg.providerThreadId ?? null,
+          createdAt: quoted ? quotedAt : at,
+        });
+        await tx.insertEvent({ ticketId: ticket.id, type: "created", actorId: null, data: {}, createdAt: quoted ? quotedAt : at });
+        // The teammate's message carries the email's provider id, so a redelivery is a duplicate.
+        // A forward with nothing written above it has none; the customer's message carries it then.
+        let teamMessage: Message | null = null;
+        if (!forwarded) {
+          teamMessage = await tx.insertMessage({
+            ...emailFields(ch, msg),
+            ticketId: ticket.id,
+            kind: "outbound",
+            authorId,
+            text: own || visibleReply(fullText),
+            fullText,
+            deliveryStatus: "sent",
+            source: "agent",
+          });
+          if (!teamMessage) throw new Duplicate();
+        } else if (own) {
+          teamMessage = await tx.insertMessage({
+            ...emailFields(ch, msg),
+            ticketId: ticket.id,
+            kind: "note",
+            authorId,
+            text: own,
+            fullText,
+            source: "agent",
+          });
+          if (!teamMessage) throw new Duplicate();
+        }
+        let customerMessage: Message | null = null;
+        if (quoted) {
+          customerMessage = await tx.insertMessage({
+            ...emailFields(ch, msg),
+            ticketId: ticket.id,
+            kind: "inbound",
+            authorId: null,
+            from: { address: quoted.from.address, name: quoted.from.name ?? contact.name },
+            to: [],
+            cc: [],
+            text: quoted.text,
+            fullText: quoted.text,
+            html: null,
+            rfcMessageId: null,
+            inReplyTo: null,
+            references: [],
+            providerMessageId: teamMessage ? `${msg.providerMessageId}#quoted` : msg.providerMessageId,
+            createdAt: quotedAt,
+          });
+          if (!customerMessage) throw new Duplicate();
+        }
+        if (forwarded) {
+          await tx.insertEvent({
+            ticketId: ticket.id,
+            type: "forwarded",
+            actorId: authorId,
+            data: { from: { address: msg.from.address, name: msg.from.name ?? null } },
+            createdAt: at,
+          });
+        }
+        const latestPublic = !forwarded ? teamMessage : customerMessage;
+        ticket = await tx.updateTicket(ticket.id, {
+          waitingSince: quoted ? quotedAt : null,
+          lastInboundAt: quoted ? quotedAt : null,
+          lastOutboundAt: forwarded ? null : at,
+          lastMessageAt: at,
+          preview: latestPublic ? snippet(latestPublic.text) : null,
+          previewKind: latestPublic?.kind === "outbound" ? "outbound" : "inbound",
+          previewAuthorId: latestPublic?.kind === "outbound" ? authorId : null,
+        });
+        return { ticket, customerMessage, teamMessage };
+      });
+    } catch (error) {
+      if (error instanceof Duplicate) return { result: "duplicate" as const };
+      throw error;
+    }
+
+    // Forwarded files came from the customer; files on a reply are the teammate's.
+    const holder = forwarded ? outcome.customerMessage ?? outcome.teamMessage : outcome.teamMessage;
+    if (holder) await saveInboundAttachments(outcome.ticket.id, holder.id, msg);
+    // A hand-off is new work for the team. An email the teammate started is waiting on the customer.
+    if (outcome.customerMessage) {
+      await safeNotify({ type: "ticket.created", ticket: outcome.ticket, message: { ...outcome.customerMessage, attachments: [] }, contact });
+    }
+    return { result: "created" as const, ticketId: outcome.ticket.id };
   }
 
   async function ingestMessage(ch: Channel, msg: InboundMessage) {
@@ -333,6 +555,13 @@ export function createSupport(options: SupportOptions) {
 
     const automated = ch.kind === "email" ? automatedReason(msg.headers, msg.from.address) : null;
     const trusted = msg.source !== "api" && !(ch.kind === "email" && senderFailedAuthentication(msg.headers));
+    if (ch.kind === "email" && trusted && !automated && (options.teamEmail ?? "loop-in") === "loop-in") {
+      const team = await teamDirectory();
+      if (team.isTeam(msg.from.address)) {
+        const handled = await ingestTeamMessage(ch, msg, team);
+        if (handled) return handled;
+      }
+    }
     const identity = normalizeIdentity(ch.identityKind, msg.from.address);
     const contact = await resolveContact(identity, msg.from.name, trusted);
     // A block never applies to a verified account holder: it may have come from a spoofed message.
@@ -510,6 +739,7 @@ export function createSupport(options: SupportOptions) {
       /** What screens show; defaults to `text`. */
       displayText?: string;
       to: Address[];
+      cc?: Address[];
       auto: boolean;
       authorId: string | null;
       attachments: Attachment[];
@@ -534,7 +764,7 @@ export function createSupport(options: SupportOptions) {
         authorId: input.authorId,
         from: { address: ch.address, name: options.fromName ?? null },
         to: input.to,
-        cc: [],
+        cc: input.cc ?? [],
         subject: isEmail ? replySubject(ticket.subject) : null,
         text: input.displayText ?? input.text,
         fullText: input.text,
@@ -563,6 +793,7 @@ export function createSupport(options: SupportOptions) {
       const result = await ch.send({
         id: input.attemptKey ?? message.id,
         to: input.to,
+        ...(isEmail && input.cc?.length ? { cc: input.cc } : {}),
         fromName: options.fromName ?? null,
         replyTo: isEmail && ch.replyAddress ? { address: addressWithToken(ch.replyAddress, ticket.replyToken) } : null,
         subject: message.subject,
@@ -601,13 +832,31 @@ export function createSupport(options: SupportOptions) {
     return ticket;
   }
 
-  /** Who the next reply goes to: whoever wrote last on this channel, else the contact's identity. */
-  async function recipientFor(ticket: Ticket, ch: Channel, contact: Contact) {
-    const messages = await store.listMessages(ticket.id, { includeNotes: false });
-    const lastInbound = [...messages].reverse().find((m) => m.kind === "inbound" && m.channelId === ch.id) ?? null;
+  /**
+   * Who the next reply goes to: whoever wrote last on this channel (unless that's your team),
+   * else the contact. On email, everyone else on the latest email is copied (see `replyAll`).
+   */
+  function recipientsFor(messages: Message[], ch: Channel, contact: Contact, team: Team) {
+    const thread = messages.filter(
+      (m) => m.kind !== "note" && m.channelId === ch.id && !m.auto && !(m.kind === "outbound" && m.deliveryStatus === "failed")
+    );
+    const lastInbound = [...thread].reverse().find((m) => m.kind === "inbound") ?? null;
+    const isCustomer = (address: string) => !isOwnAddress(address) && !team.isTeam(address);
     const identity = contact.identities.find((i) => i.kind === ch.identityKind);
-    const to = lastInbound?.from ?? (identity ? { address: identity.value, name: contact.name } : null);
-    return { to, lastInbound };
+    const to =
+      lastInbound?.from && isCustomer(lastInbound.from.address)
+        ? lastInbound.from
+        : identity
+          ? { address: identity.value, name: contact.name }
+          : null;
+    const latest = thread.at(-1);
+    const cc =
+      ch.kind === "email" && to && latest && options.replyAll !== false
+        ? dedupeAddresses([latest.from, ...latest.to, ...latest.cc].filter((a): a is Address => Boolean(a) && isCustomer(a!.address)), [to.address])
+        : [];
+    // Thread on the newest email we know the Message-ID of.
+    const replyTo = lastInbound?.rfcMessageId ? lastInbound : [...thread].reverse().find((m) => m.rfcMessageId) ?? lastInbound;
+    return { to, cc, replyTo };
   }
 
   function replyBlockedReason(ticket: Ticket, ch: Channel | null): TicketDetail["replyBlockedReason"] {
@@ -627,6 +876,8 @@ export function createSupport(options: SupportOptions) {
     text: string;
     attachmentIds?: string[];
     status?: ReplyStatus;
+    /** Who to copy, replacing the default from `recipients.cc`. Email only. */
+    cc?: Address[];
   }) {
     const text = input.text.trim();
     if (!text) throw new SupportError("invalid", "Write a message first.");
@@ -641,8 +892,20 @@ export function createSupport(options: SupportOptions) {
       throw new SupportError("too_large", `Messages on this channel are limited to ${ch.capabilities.maxTextLength} characters.`);
     }
     const contact = (await store.getContact(ticket.contactId))!;
-    const { to, lastInbound } = await recipientFor(ticket, ch, contact);
+    const team = await teamDirectory();
+    const recipients = recipientsFor(await store.listMessages(ticket.id, { includeNotes: false }), ch, contact, team);
+    const to = recipients.to;
     if (!to) throw new SupportError("invalid", "This customer has no address on this channel.");
+    let cc = recipients.cc;
+    if (input.cc && ch.kind === "email") {
+      const invalid = input.cc.find((a) => !EMAIL.test(a.address.trim()));
+      if (invalid) throw new SupportError("invalid", `${invalid.address} isn't a valid email address.`);
+      if (input.cc.length > 20) throw new SupportError("invalid", "Copy at most 20 people.");
+      cc = dedupeAddresses(
+        input.cc.map((a) => ({ address: a.address.trim(), name: a.name ?? null })).filter((a) => !isOwnAddress(a.address)),
+        [to.address]
+      );
+    }
 
     const attachments = await loadUploads(ticket.id, input.attachmentIds ?? [], ch);
     const agents = await agentsById();
@@ -654,10 +917,11 @@ export function createSupport(options: SupportOptions) {
       text: body,
       displayText: text,
       to: [to],
+      cc,
       auto: false,
       authorId: input.agentId,
       attachments,
-      replyTo: lastInbound,
+      replyTo: recipients.replyTo,
     });
 
     // Nothing reached the customer: leave the ticket as it was, with the failed message to retry.
@@ -725,6 +989,7 @@ export function createSupport(options: SupportOptions) {
     return sendOutbound(ch, ticket, {
       text: message.fullText ?? message.text,
       to: message.to,
+      cc: message.cc,
       auto: message.auto,
       authorId: message.authorId,
       attachments: message.attachments,
@@ -823,6 +1088,38 @@ export function createSupport(options: SupportOptions) {
     return updated;
   }
 
+  /**
+   * Makes someone else the ticket's contact, such as the customer when a teammate's email opened
+   * it. Replies go to them from now on. They're matched to an account as usual.
+   */
+  async function changeContact(input: { ticketId: string; address: string; name?: string | null; actorId: string }) {
+    const ticket = await getTicketOrThrow(input.ticketId);
+    const kind = channel(ticket.channelId)?.identityKind ?? "email";
+    const value = input.address.trim();
+    if (kind === "email" && !EMAIL.test(value)) throw new SupportError("invalid", "Enter a valid email address.");
+    if (kind === "email" && isOwnAddress(value)) throw new SupportError("invalid", "That's one of your own support addresses.");
+    const contact = await resolveContact(normalizeIdentity(kind, value), input.name, true);
+    if (contact.id === ticket.contactId) return ticket;
+    if (input.name?.trim() && !contact.name) await store.updateContact(contact.id, { name: input.name.trim() });
+    const customerId = contact.customerId ?? ticket.customerId;
+    const updated = await store.updateTicket(ticket.id, { contactId: contact.id, customerId });
+    await store.insertEvent({
+      ticketId: ticket.id,
+      type: "contact_changed",
+      actorId: input.actorId,
+      data: { from: ticket.contactId, to: contact.id, address: value },
+    });
+    if (customerId !== ticket.customerId) {
+      await store.insertEvent({
+        ticketId: ticket.id,
+        type: "customer_linked",
+        actorId: input.actorId,
+        data: { from: ticket.customerId, to: customerId },
+      });
+    }
+    return updated;
+  }
+
   async function uploadAttachment(input: {
     ticketId: string;
     filename: string;
@@ -888,6 +1185,8 @@ export function createSupport(options: SupportOptions) {
       : { items: [] as Ticket[], total: 0 };
     await store.markRead(ticket.id, viewerId, now());
     const ch = channel(ticket.channelId);
+    const recipients =
+      ch && contact ? recipientsFor(messages, ch, contact, await teamDirectory()) : { to: null, cc: [] as Address[] };
     const timeline: TimelineEntry[] = [
       ...messages.map((message) => ({ type: "message" as const, at: message.createdAt, message })),
       ...events
@@ -901,7 +1200,8 @@ export function createSupport(options: SupportOptions) {
       assignee: ticket.assigneeId ? agents.get(ticket.assigneeId) ?? null : null,
       timeline,
       channel: ch ? { id: ch.id, kind: ch.kind, address: ch.address, capabilities: ch.capabilities } : null,
-      replyBlockedReason: replyBlockedReason(ticket, ch),
+      replyBlockedReason: replyBlockedReason(ticket, ch) ?? (recipients.to ? null : "no_recipient"),
+      recipients: { to: recipients.to, cc: recipients.cc },
       previousTickets: previous.items
         .filter((t) => t.id !== ticket.id)
         .slice(0, 5)
@@ -1181,6 +1481,7 @@ export function createSupport(options: SupportOptions) {
     assign,
     setStatus,
     linkCustomer,
+    changeContact,
     uploadAttachment,
     attachmentUrl,
     listTickets,
@@ -1198,6 +1499,19 @@ export type Support = ReturnType<typeof createSupport>;
 function randomToken() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return Array.from(bytes, (b) => b.toString(36).padStart(2, "0")).join("").slice(0, 24);
+}
+
+const EMAIL = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;
+
+/** Removes repeats (and `exclude`), comparing addresses without case. */
+function dedupeAddresses(addresses: Address[], exclude: string[] = []): Address[] {
+  const seen = new Set(exclude.map((a) => a.toLowerCase()));
+  return addresses.filter((a) => {
+    const key = a.address.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function safeFilename(name: string) {

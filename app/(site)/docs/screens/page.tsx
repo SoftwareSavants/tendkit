@@ -36,7 +36,7 @@ export async function POST(request: Request) {
       return Response.json(await s.getTicket(input.id, agent.id));
     case "reply":
       return Response.json(await s.reply({ ...input, agentId: agent.id }));
-    // …addNote, assign, setStatus, linkCustomer, retry, uploadAttachment, attachmentUrl
+    // …addNote, assign, setStatus, linkCustomer, changeContact, retry, uploadAttachment, attachmentUrl
   }
 }`;
 
@@ -56,6 +56,7 @@ export const supportClient: SupportClient = {
   assign: (input) => call("assign", input),
   setStatus: (input) => call("setStatus", input),
   linkCustomer: (input) => call("linkCustomer", input),
+  changeContact: (input) => call("changeContact", input),
   retry: (input) => call("retry", input),
   upload: ({ ticketId, file }) => uploadFile(ticketId, file),
   attachmentUrl: (input) => call("attachmentUrl", input),

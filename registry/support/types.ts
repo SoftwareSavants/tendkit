@@ -104,7 +104,9 @@ export type TicketEventType =
   | "status_changed"
   | "customer_linked"
   | "reopened"
-  | "follow_up";
+  | "follow_up"
+  | "contact_changed"
+  | "forwarded";
 
 export type TicketEvent = {
   id: string;

@@ -115,6 +115,99 @@ export function withoutSignature(text: string, signature: string | null | undefi
   return lines.slice(0, tail[0]).join("\n").trim();
 }
 
+/** The quoted or forwarded email inside a message: who wrote it, when, and what they wrote. */
+export type QuotedMessage = {
+  from: { address: string; name: string | null };
+  /** When the quoted email was sent, if its header gave a date we could read. */
+  sentAt: Date | null;
+  /** What the quoted email said, without its own quoted history. */
+  text: string;
+  /** What the sender wrote above the quote. */
+  before: string;
+};
+
+const FROM_LABEL = /^[\s>*]*(?:From|De|Von|Da|Van|من|المرسل)\s*\*?\s*:\s*\*?\s*(.+)$/i;
+const DATE_LABEL = /^[\s>*]*(?:Sent|Date|Envoyé|Gesendet|Datum|Fecha|Enviado|Data|تم الإرسال|التاريخ)\s*\*?\s*:\s*\*?\s*(.+)$/i;
+const WROTE = /^\s*(?:wrote|a écrit|escribió|schrieb|schreef|ha scritto)\s*:?\s*$/i;
+/** Gmail, Apple Mail and Thunderbird: "On Mon, Nov 9, 2026 at 4:23 PM Emma <emma@acme.test> wrote:". */
+const ATTRIBUTION =
+  /^[\s>]*(?:On|Le|El|Am|Op|Il)\s(.+?\d{1,2}[:.h]\d{2}(?::\d{2})?(?:\s*[AP]\.?M\.?)?|.+?),?\s+([^,<>]*?)\s*<([^<>\s]+@[^<>\s]+)>\s*(?:wrote|a écrit|escribió|schrieb|schreef|ha scritto)\s*:?\s*$/i;
+const FORWARD_SEPARATOR =
+  /^[\s>*]*(?:-{2,}\s*(?:Original Message|Forwarded message|Message d'origine|Message transféré|Ursprüngliche Nachricht|Mensaje original|الرسالة الأصلية|رسالة معاد توجيهها)\s*-{2,}|(?:Begin forwarded message|Début du message (?:réexpédié|transféré))\s*:)/i;
+const RULE = /^\s*(?:[_\-=–—]\s*){5,}$/;
+
+/**
+ * The email quoted below a reply or inside a forward, read from the header mail clients put
+ * above it: Outlook's "From: / Sent:" block, Gmail's "On … wrote:", Apple Mail's "Begin
+ * forwarded message:". Pass the HTML too, for messages whose plain text leaves the quote out.
+ * Returns null when there's no quote, or its sender has no email address.
+ */
+export function quotedMessage(text: string | null | undefined, html?: string | null): QuotedMessage | null {
+  return (text ? findQuoted(text) : null) ?? (html ? findQuoted(htmlToText(html, { keepQuotes: true })) : null);
+}
+
+function findQuoted(source: string): QuotedMessage | null {
+  const lines = source.replace(/\r\n?/g, "\n").replace(BIDI_CONTROLS, "").replace(/[  ]/g, " ").split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    let from: QuotedMessage["from"] | null = null;
+    let date: string | null = null;
+    let bodyStart = -1;
+    let quoted = false;
+
+    if (FROM_LABEL.test(line) && isHeaderBlock(lines, i)) {
+      from = parseAddressText(FROM_LABEL.exec(line)![1]!);
+      // The block ends at a blank line or the first line that isn't a header (a wrapped To: list may continue).
+      let j = i;
+      const isLabel = (k: number) => k < lines.length && HEADER_LABEL.test(lines[k]!);
+      while (j < lines.length && lines[j]!.trim() !== "" && (isLabel(j) || isLabel(j + 1))) {
+        const d = DATE_LABEL.exec(lines[j]!);
+        if (d) date = d[1]!;
+        j++;
+      }
+      bodyStart = j;
+    } else {
+      // Gmail wraps a long attribution onto two lines.
+      const wrapped = lines[i + 1] !== undefined && WROTE.test(lines[i + 1]!);
+      const m = ATTRIBUTION.exec(wrapped ? `${line} ${lines[i + 1]}` : line);
+      if (m) {
+        from = { address: m[3]!.toLowerCase(), name: unquote(m[2]!) };
+        date = m[1]!.replace(/\s+(?:at|à)\s+/i, " ");
+        bodyStart = wrapped ? i + 2 : i + 1;
+        quoted = true;
+      }
+    }
+    if (bodyStart === -1) continue;
+    if (!from) return null;
+
+    let end = i;
+    while (end > 0 && (RULE.test(lines[end - 1]!) || FORWARD_SEPARATOR.test(lines[end - 1]!) || !lines[end - 1]!.trim())) end--;
+    let body = lines.slice(bodyStart);
+    if (quoted || body.filter((l) => l.trim()).every((l) => /^\s*>/.test(l))) body = body.map((l) => l.replace(/^\s*> ?/, ""));
+    const quotedText = body.join("\n").trim();
+    if (!quotedText) return null;
+    return { from, sentAt: parseMailDate(date), text: visibleReply(quotedText), before: lines.slice(0, end).join("\n").trim() };
+  }
+  return null;
+}
+
+const unquote = (s: string) => s.replace(/^["']|["']$/g, "").trim() || null;
+
+/** "Emma Clarke <emma@acme.test>", "Emma [mailto:emma@acme.test]" or "emma@acme.test". */
+function parseAddressText(value: string): QuotedMessage["from"] | null {
+  const clean = value.replace(/\*/g, "").trim();
+  const m = /^(.*?)\s*[<[](?:mailto:)?([^<>[\]\s]+@[^<>[\]\s]+)[>\]]\s*$/i.exec(clean);
+  if (m) return { address: m[2]!.toLowerCase(), name: unquote(m[1]!) };
+  if (/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(clean)) return { address: clean.toLowerCase(), name: null };
+  return null;
+}
+
+function parseMailDate(value: string | null): Date | null {
+  if (!value) return null;
+  const ms = Date.parse(value.trim());
+  return Number.isFinite(ms) ? new Date(ms) : null;
+}
+
 function isHeaderBlock(lines: string[], i: number): boolean {
   if (!HEADER_LABEL.test(lines[i]!)) return false;
   const following = lines.slice(i + 1, i + 5).filter((l) => HEADER_LABEL.test(l));
@@ -124,15 +217,18 @@ function isHeaderBlock(lines: string[], i: number): boolean {
 const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
 
 /** Readable text from HTML email, without a DOM. Quotes become "> " lines so trimming still works. */
-export function htmlToText(html: string): string {
+export function htmlToText(html: string, options: { keepQuotes?: boolean } = {}): string {
   let s = html
     .replace(/<!--[\s\S]*?-->/g, "")
     .replace(/<(head|style|script|title)[^>]*>[\s\S]*?<\/\1>/gi, "")
     // Known quote containers: everything inside becomes quoted.
     .replace(/<blockquote[^>]*>([\s\S]*?)<\/blockquote>/gi, (_, inner: string) =>
       `\n${htmlToText(inner).split("\n").map((l) => `> ${l}`).join("\n")}\n`
-    )
-    .replace(/<div[^>]+(?:gmail_quote|yahoo_quoted|divRplyFwdMsg|appendonsend|moz-cite-prefix|protonmail_quote)[\s\S]*$/i, "\n> \n")
+    );
+  if (!options.keepQuotes) {
+    s = s.replace(/<div[^>]+(?:gmail_quote|yahoo_quoted|divRplyFwdMsg|appendonsend|moz-cite-prefix|protonmail_quote)[\s\S]*$/i, "\n> \n");
+  }
+  s = s
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/(p|div|h[1-6]|li|tr|table|ul|ol|section|article)>/gi, "\n")
     .replace(/<li[^>]*>/gi, "• ")

@@ -66,7 +66,7 @@ export default function Directory() {
           },
           { name: "searchCustomers", type: "(query) => { id, name }[]", required: true, description: "Powers the link-to-customer picker and inbox search." },
           { name: "getCustomers", type: "(ids) => { id, name }[]", required: true, description: "Names for the customers shown in the inbox." },
-          { name: "listAgents", type: "() => { id, name, email? }[]", required: true, description: "Who can be assigned. The agent id is what your API passes as agentId." },
+          { name: "listAgents", type: "() => { id, name, email? }[]", required: true, description: "Who can be assigned. The agent id is what your API passes as agentId. With an email, their own email to the support address counts as your team's." },
         ]}
       />
       <p>

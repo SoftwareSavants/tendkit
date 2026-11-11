@@ -41,6 +41,7 @@
     "more": "More actions",
     "linkCustomer": "Link to a customer",
     "changeCustomer": "Change customer",
+    "changeContact": "Change contact",
     "markSpam": "Mark as spam",
     "notSpam": "Not spam",
     "formerAgent": "Former teammate",
@@ -63,13 +64,20 @@
       "linked": "{actor} linked a customer",
       "unlinked": "{actor} unlinked the customer",
       "reopened": "Reopened by the customer's reply",
-      "followUp": "Follow-up to ticket #{number}"
+      "followUp": "Follow-up to ticket #{number}",
+      "contactChanged": "{actor} changed the contact to {address}",
+      "forwarded": "Forwarded by {actor}"
     }
   },
   "composer": {
     "reply": "Reply",
     "note": "Internal note",
     "to": "To",
+    "cc": "Cc",
+    "addCc": "Add Cc",
+    "ccPlaceholder": "name@example.com",
+    "removeCc": "Remove {name}",
+    "invalidCc": "{address} isn't a valid email address.",
     "replyPlaceholder": "Write a reply…",
     "notePlaceholder": "Only your team sees notes.",
     "attach": "Attach",
@@ -82,6 +90,12 @@
       "no_channel": "This ticket's channel is no longer set up, so replies can't be sent.",
       "no_recipient": "There's no address to reply to on this channel."
     }
+  },
+  "contact": {
+    "title": "Change contact",
+    "description": "Replies go to this address from now on. If it belongs to an account, the ticket links to it.",
+    "email": "Email",
+    "save": "Change contact"
   },
   "link": {
     "title": "Link to a customer",

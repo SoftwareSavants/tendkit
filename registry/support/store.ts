@@ -83,6 +83,7 @@ export type TicketPatch = Partial<
     Ticket,
     | "subject"
     | "status"
+    | "contactId"
     | "customerId"
     | "assigneeId"
     | "providerThreadId"

@@ -14,10 +14,10 @@ Registry items: support (core), support-postgres, support-d1, support-ui, channe
 
 1. Install the items above with the shadcn CLI (server items into the API package, support-ui into the web app in a monorepo).
 2. Export the support schema from the Drizzle schema and generate a migration. Don't apply migrations without asking.
-3. Create the service with createSupport({ store, storage, channels, directory, notify, acknowledgement, fromName, portalChannelId, ignoreFrom }).
+3. Create the service with createSupport({ store, storage, channels, directory, notify, acknowledgement, fromName, portalChannelId, ignoreFrom, team, teamEmail, replyAll }).
 4. Implement the SupportDirectory: identify (sender to user and customer/account), searchCustomers, getCustomers, listAgents. This is the only product-specific part.
 5. Route POST /api/webhooks/support/[channel] to support().handleWebhook(channel, request). Call support().runScheduled() from a cron every few minutes.
-6. Expose the agent methods (listTickets, getTicket, reply, addNote, assign, setStatus, linkCustomer, uploadAttachment, attachmentUrl, counts, listAgents, searchCustomers) and support().portal through the app's own API behind its own auth; implement SupportClient with them and render SupportInbox/SupportTicket inside SupportProvider.
+6. Expose the agent methods (listTickets, getTicket, reply, addNote, assign, setStatus, linkCustomer, changeContact, uploadAttachment, attachmentUrl, counts, listAgents, searchCustomers) and support().portal through the app's own API behind its own auth; implement SupportClient with them and render SupportInbox/SupportTicket inside SupportProvider.
 7. For email: use a receiving subdomain (e.g. in.acme.com) for the reply address, keep the main mailbox where it is, and copy mail to the receiving address. The Resend adapter needs a Full access API key to read received mail.
 
 ## Docs

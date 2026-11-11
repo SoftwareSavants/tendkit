@@ -4,7 +4,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "test": "vitest run && TENDKIT_STORE=d1 vitest run tests/service.test.ts",
+    "test": "vitest run && TENDKIT_STORE=d1 vitest run tests/service.test.ts tests/team.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.check.json && tsc --noEmit -p tsconfig.server.json",
     "registry:build": "shadcn build",
     "dev": "next dev",
