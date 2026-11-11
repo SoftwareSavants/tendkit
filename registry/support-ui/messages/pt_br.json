@@ -1,0 +1,125 @@
+{
+  "status": {
+    "open": "Aberto",
+    "waiting": "Aguardando cliente",
+    "solved": "Resolvido",
+    "spam": "Spam"
+  },
+  "inbox": {
+    "search": "Buscar tickets",
+    "assignee": "Responsável",
+    "anyone": "Qualquer pessoa",
+    "me": "Atribuídos a mim",
+    "unassigned": "Sem responsável",
+    "columns": {
+      "customer": "Cliente",
+      "subject": "Assunto",
+      "assignee": "Responsável",
+      "waiting": "Aguardando",
+      "solved": "Resolvido",
+      "updated": "Atualizado"
+    },
+    "empty": {
+      "open": "Nada precisa de resposta.",
+      "waiting": "Nenhum ticket aguardando cliente.",
+      "solved": "Nenhum ticket resolvido ainda.",
+      "spam": "Nenhum spam.",
+      "search": "Nenhum ticket corresponde à sua busca."
+    },
+    "range": "{from}–{to} de {total}",
+    "you": "Você",
+    "unread": "Nova atividade",
+    "noSubject": "(sem assunto)",
+    "unknownSender": "Remetente desconhecido"
+  },
+  "ticket": {
+    "back": "Suporte",
+    "spamNotice": "Marcado como spam. Novas mensagens deste remetente são ignoradas.",
+    "statusLabel": "Status:",
+    "assigneeLabel": "Responsável:",
+    "assignToMe": "Eu",
+    "more": "Mais ações",
+    "linkCustomer": "Vincular a um cliente",
+    "changeCustomer": "Alterar cliente",
+    "markSpam": "Marcar como spam",
+    "notSpam": "Não é spam",
+    "formerAgent": "Ex-colega de equipe",
+    "note": "Nota interna",
+    "viaPortal": "pelo app",
+    "autoReplySent": "Resposta automática enviada",
+    "showOriginal": "Mostrar mensagem completa",
+    "showReply": "Mostrar apenas a resposta",
+    "showImages": "Mostrar imagens",
+    "notDelivered": "Não entregue.",
+    "contact": "Contato",
+    "unknownSenderHelp": "Este e-mail não corresponde a nenhuma conta. Vincule-o uma vez e as próximas mensagens serão vinculadas automaticamente.",
+    "previous": "Tickets anteriores",
+    "events": {
+      "system": "Suporte",
+      "took": "{actor} assumiu este ticket",
+      "assigned": "{actor} atribuiu este ticket a {assignee}",
+      "unassigned": "{actor} removeu o responsável deste ticket",
+      "status": "{actor} definiu o status como {status}",
+      "linked": "{actor} vinculou um cliente",
+      "unlinked": "{actor} desvinculou o cliente",
+      "reopened": "Reaberto pela resposta do cliente",
+      "followUp": "Acompanhamento do ticket #{number}"
+    }
+  },
+  "composer": {
+    "reply": "Responder",
+    "note": "Nota interna",
+    "to": "Para",
+    "replyPlaceholder": "Escreva uma resposta…",
+    "notePlaceholder": "Somente sua equipe vê as notas.",
+    "attach": "Anexar",
+    "removeFile": "Remover {name}",
+    "send": "Enviar",
+    "sendAndSolve": "Enviar e marcar como resolvido",
+    "addNote": "Adicionar nota",
+    "blocked": {
+      "reply_window_closed": "Você só pode responder até 24 horas após a última mensagem do cliente neste canal. Deixe uma nota ou aguarde o cliente escrever novamente.",
+      "no_channel": "O canal deste ticket não está mais configurado, então não é possível enviar respostas.",
+      "no_recipient": "Não há endereço para resposta neste canal."
+    }
+  },
+  "link": {
+    "title": "Vincular a um cliente",
+    "description": "Escolha o cliente ao qual {name} pertence.",
+    "search": "Buscar clientes",
+    "hint": "Digite pelo menos dois caracteres.",
+    "none": "Nenhum cliente encontrado.",
+    "unlink": "Desvincular de {name}"
+  },
+  "portal": {
+    "newRequest": "Nova solicitação",
+    "emptyTitle": "Nenhuma solicitação ainda",
+    "emptyBody": "Dúvidas sobre sua conta? Envie uma solicitação e responderemos por e-mail.",
+    "status": {
+      "open": "Aberta",
+      "awaitingYou": "Aguardando sua resposta",
+      "solved": "Resolvida"
+    },
+    "newReply": "Nova resposta",
+    "subject": "Assunto",
+    "message": "Mensagem",
+    "send": "Enviar",
+    "back": "Todas as solicitações",
+    "notFound": "Esta solicitação não existe ou você não tem acesso a ela.",
+    "you": "Você",
+    "team": "Suporte",
+    "replyPlaceholder": "Escreva uma resposta…",
+    "emailNote": "Também enviaremos um e-mail quando respondermos."
+  },
+  "errors": {
+    "load": "Não foi possível carregar. Verifique sua conexão e tente novamente.",
+    "send": "Não foi possível enviar. Tente novamente.",
+    "upload": "Não foi possível enviar este arquivo."
+  },
+  "actions": {
+    "retry": "Tentar novamente",
+    "previous": "Página anterior",
+    "next": "Próxima página",
+    "cancel": "Cancelar"
+  }
+}
