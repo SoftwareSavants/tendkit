@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, ArrowLeft, Ban, Link2, MoreHorizontal, RotateCw } from "lucide-react";
+import { AlertCircle, ArrowLeft, Ban, Link2, MoreHorizontal, RotateCw, UserPen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -106,6 +106,7 @@ function TicketControls({ detail, agents }: { detail: TicketDetail; agents: Agen
   const setStatus = useTicketMutation(id, (status: TicketStatus) => client.setStatus({ ticketId: id, status }));
   const assign = useTicketMutation(id, (assigneeId: string | null) => client.assign({ ticketId: id, assigneeId }));
   const [linking, setLinking] = useState(false);
+  const [changingContact, setChangingContact] = useState(false);
   // Controlled, so picking an option closes the menu with Radix and Base UI alike.
   const [statusOpen, setStatusOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
@@ -174,6 +175,10 @@ function TicketControls({ detail, agents }: { detail: TicketDetail; agents: Agen
             <Link2 className="size-4" />
             {detail.customer ? t("ticket.changeCustomer") : t("ticket.linkCustomer")}
           </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setChangingContact(true)}>
+            <UserPen className="size-4" />
+            {t("ticket.changeContact")}
+          </DropdownMenuItem>
           {detail.ticket.status === "spam" ? (
             <DropdownMenuItem onClick={() => setStatus.mutate("open")}>
               <RotateCw className="size-4" />
@@ -188,6 +193,7 @@ function TicketControls({ detail, agents }: { detail: TicketDetail; agents: Agen
         </DropdownMenuContent>
       </DropdownMenu>
       <LinkCustomerDialog detail={detail} open={linking} onOpenChange={setLinking} />
+      <ChangeContactDialog detail={detail} open={changingContact} onOpenChange={setChangingContact} />
     </div>
   );
 }
