@@ -95,6 +95,7 @@ export default function Service() {
           { name: "replyAll", type: "boolean", default: "true", description: "Replies copy everyone else on the latest email, minus your addresses and your team. Agents can change it per reply." },
           { name: "reopenWindowDays", type: "number", default: "14", description: "A reply within this many days reopens a solved ticket; later replies open a new one that links back." },
           { name: "maxAttachmentBytes", type: "number", default: "25 MB", description: "Larger inbound files are skipped; larger uploads are refused." },
+          { name: "ai", type: "supportAi({ model, store, … })", description: <>Optional triage, summaries and suggested replies. See <Link href="/docs/ai">AI</Link>.</> },
           { name: "now", type: "() => Date", description: "For tests." },
           { name: "log", type: "(level, message, data) => void", default: "console", description: "Where warnings and errors go." },
         ]}
@@ -136,15 +137,16 @@ export default function Service() {
       <Props
         rows={[
           { name: "handleWebhook", type: "(channelId, request) => Response", description: <>For your webhook route. See <Link href="/docs/webhooks">Webhooks</Link>.</> },
-          { name: "runScheduled", type: "() => Promise<summary>", description: "Polls channels, renews subscriptions, fails sends that never finished." },
+          { name: "runScheduled", type: "() => Promise<summary>", description: "Polls channels, renews subscriptions, fails sends that never finished. With AI, also handles queued messages and the daily knowledge sync." },
           { name: "ingest", type: "(channelId, event)", description: "Feed an event directly, for tests or custom transports." },
-          { name: "listTickets / getTicket / counts", type: "", description: "What the inbox and ticket screens read." },
+          { name: "listTickets / getTicket / counts", type: "", description: "What the inbox and ticket screens read. getTicket includes accountFacts from your directory's describeCustomer." },
           { name: "reply / retry / addNote", type: "", description: "Send a reply (status and attachments included), retry a failed one, or add an internal note." },
           { name: "assign / setStatus / linkCustomer", type: "", description: "Assignment, status (open, waiting, solved, spam) and linking a sender to a customer." },
           { name: "changeContact", type: "({ ticketId, address, actorId })", description: "Makes someone else the ticket's contact. Replies go to them, and they're matched to an account as usual." },
           { name: "uploadAttachment / attachmentUrl", type: "", description: "Agent uploads, and short-lived download links with access checks." },
           { name: "searchCustomers / listAgents / markRead", type: "", description: "Pickers and read state per agent." },
           { name: "portal.list / get / create / reply", type: "", description: <>The customer portal. See <Link href="/docs/portal">Customer portal</Link>.</> },
+          { name: "ai.*", type: "", description: <>Only when <code>ai</code> is configured. See <Link href="/docs/ai#methods">AI</Link>.</> },
         ]}
       />
 

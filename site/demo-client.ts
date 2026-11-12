@@ -1,13 +1,16 @@
 import type {
   Agent,
+  AiSettings,
   Customer,
   FileInfo,
   PortalMessage,
   PortalTicket,
+  Suggestion,
   SupportClient,
   SupportPortalClient,
   TicketCounts,
   TicketDetail,
+  TicketInsight,
   TicketListItem,
   TicketStatus,
   TimelineEvent,
@@ -18,14 +21,17 @@ import type {
  * The live demo's backend: the same contract your API gives the screens, kept in memory in the
  * visitor's browser. After your first reply on a ticket, the customer answers back a few seconds
  * later, so you can see the whole loop. Nothing leaves the page; a reload starts over.
+ *
+ * The AI here is scripted: suggested replies, summaries and rewrites are written in this file, so
+ * the demo works without a model or a key. In your app they come from the model you configure.
  */
 
 export const VIEWER: Agent = { id: "agent_you", name: "Alex Chen" };
 const AGENTS: Agent[] = [VIEWER, { id: "agent_priya", name: "Priya Patel" }, { id: "agent_tom", name: "Tom Okafor" }];
 
-export type DemoAccount = Customer & { plan: string; seats: number; since: string; lastOrder: string };
+export type DemoAccount = Customer & { plan: string; seats: number; since: string; lastOrder: string; lastPayout?: string };
 export const ACCOUNTS: DemoAccount[] = [
-  { id: "acc_northwind", name: "Northwind Coffee", plan: "Growth", seats: 4, since: "Mar 2025", lastOrder: "#1043 · $86.00" },
+  { id: "acc_northwind", name: "Northwind Coffee", plan: "Growth", seats: 4, since: "Mar 2025", lastOrder: "#1043 · $86.00", lastPayout: "$1,240.00 · sent Monday" },
   { id: "acc_atlas", name: "Atlas Freight", plan: "Business", seats: 18, since: "Nov 2024", lastOrder: "#7718 · $1,240.00" },
   { id: "acc_sol", name: "Clínica Sol", plan: "Starter", seats: 2, since: "Aug 2026", lastOrder: "#0291 · $49.00" },
   { id: "acc_rossi", name: "Rossi Studio", plan: "Growth", seats: 6, since: "Jan 2026", lastOrder: "#3310 · $312.50" },
@@ -46,8 +52,17 @@ type Ticket = TicketDetail["ticket"] & {
   answered: boolean;
 };
 
+type Scripted = { insight: TicketInsight; suggestion: Omit<Suggestion, "id"> | null; translations?: Record<string, string>; replyInTheirLanguage?: string };
+
 type State = {
   tickets: Ticket[];
+  insights: Map<string, TicketInsight>;
+  suggestions: Map<string, Suggestion>;
+  /** Scripted English for messages written in another language, by message id. */
+  translations: Map<string, string>;
+  /** The scripted reply in the customer's language, for "Translate to …". */
+  localized: Map<string, string>;
+  ai: AiSettings;
   messages: Map<string, TimelineMessage[]>;
   events: Map<string, TimelineEvent[]>;
   reads: Map<string, Date>;
@@ -78,7 +93,27 @@ function message(partial: Partial<TimelineMessage> & Pick<TimelineMessage, "kind
 }
 
 function seed(): State {
-  const state: State = { tickets: [], messages: new Map(), events: new Map(), reads: new Map(), files: new Map(), seq: 1040 };
+  const state: State = {
+    tickets: [],
+    insights: new Map(),
+    suggestions: new Map(),
+    translations: new Map(),
+    localized: new Map(),
+    ai: {
+      guidance: "Friendly and brief. Say what we can see on the account before explaining policy. Refunds within 30 days only.",
+      topics: ["Payouts", "Billing", "Account access", "Exports"],
+      draftOnArrival: true,
+      sources: [
+        { id: "help-center", articles: 42, syncedAt: minutes(190) },
+        { id: "developer-docs", articles: 118, syncedAt: minutes(190) },
+      ],
+    },
+    seq: 1040,
+    messages: new Map(),
+    events: new Map(),
+    reads: new Map(),
+    files: new Map(),
+  };
 
   const add = (t: {
     channel: ChannelKind;
@@ -89,7 +124,8 @@ function seed(): State {
     status: TicketStatus;
     assigneeId?: string | null;
     read?: boolean;
-    thread: { kind: "inbound" | "outbound" | "note"; text: string; ago: number; authorId?: string; fullText?: string }[];
+    thread: { kind: "inbound" | "outbound" | "note"; text: string; ago: number; authorId?: string; fullText?: string; english?: string }[];
+    ai?: Scripted;
   }) => {
     const id = nextId("tkt");
     const identityKind = t.channel === "email" ? "email" : "phone";
@@ -125,6 +161,12 @@ function seed(): State {
     state.messages.set(id, msgs);
     state.events.set(id, []);
     if (t.read) state.reads.set(id, new Date());
+    t.thread.forEach((m, i) => m.english && state.translations.set(msgs[i]!.id, m.english));
+    if (t.ai) {
+      state.insights.set(id, t.ai.insight);
+      if (t.ai.suggestion) state.suggestions.set(id, { id: nextId("sug"), ...t.ai.suggestion });
+      if (t.ai.replyInTheirLanguage) state.localized.set(id, t.ai.replyInTheirLanguage);
+    }
   };
 
   add({
@@ -143,6 +185,19 @@ function seed(): State {
           "Hi, last week's payout hasn't reached our bank account yet. Could you check what happened?\n\nThanks,\nEmma\n\nEmma Clarke\nOwner, Northwind Coffee\n\nSent from my iPhone",
       },
     ],
+    ai: {
+      insight: { topic: "Payouts", urgency: "high", urgencyReason: "A payout is late", mood: "calm", language: "en", summary: "Last week's payout hasn't reached their bank" },
+      suggestion: {
+        kind: "draft",
+        text: "Hi Emma,\n\nThanks for flagging this. Your payout of $1,240.00 left our side on Monday. Banks can take up to 3 business days to show it, so it should reach your account by Thursday.\n\nIf it hasn't arrived by then, reply here and we'll trace it with the bank.",
+        reason: null,
+        sources: [
+          { type: "knowledge", id: "help-center/payout-schedule", title: "Payout schedule" },
+          { type: "fact", id: "fact:1", title: "Last payout" },
+          { type: "guidance", id: "guidance", title: "Team guidance" },
+        ],
+      },
+    },
   });
   add({
     channel: "whatsapp",
@@ -157,6 +212,18 @@ function seed(): State {
       { kind: "inbound", ago: 190, text: "Hello! Can I add a second admin to our account?" },
       { kind: "note", ago: 160, authorId: "agent_priya", text: "They're on Business, so a second admin is included. Checking whether the invite email bounced." },
     ],
+    ai: {
+      insight: { topic: "Account access", urgency: "normal", urgencyReason: null, mood: "calm", language: "en", summary: "Wants to add a second admin" },
+      suggestion: {
+        kind: "draft",
+        text: "Hi Daniel! Yes, your Business plan includes extra admins. Go to Settings, then Team, choose Invite and pick the Admin role. They'll get an email to join.",
+        reason: null,
+        sources: [
+          { type: "knowledge", id: "help-center/team-roles", title: "Team roles" },
+          { type: "fact", id: "fact:1", title: "Plan" },
+        ],
+      },
+    },
   });
   add({
     channel: "email",
@@ -166,6 +233,10 @@ function seed(): State {
     subject: "Do you offer annual billing?",
     status: "open",
     thread: [{ kind: "inbound", ago: 48, text: "We're a team of 12 and would rather pay yearly. Is there a discount for annual billing?" }],
+    ai: {
+      insight: { topic: "Billing", urgency: "normal", urgencyReason: null, mood: "calm", language: "en", summary: "Asks about a discount for annual billing" },
+      suggestion: { kind: "cannot_answer", text: null, reason: "the help center doesn't mention annual billing or discounts.", sources: [] },
+    },
   });
   add({
     channel: "sms",
@@ -173,13 +244,28 @@ function seed(): State {
     identity: "+34 600 123 456",
     account: "acc_sol",
     subject: null,
-    status: "waiting",
+    status: "open",
     assigneeId: VIEWER.id,
-    read: true,
     thread: [
-      { kind: "inbound", ago: 300, text: "Invoice 2381 has our old address on it." },
-      { kind: "outbound", ago: 280, authorId: VIEWER.id, text: "Sorry about that! Can you send me the new address?" },
+      { kind: "inbound", ago: 300, text: "La factura 2381 tiene nuestra dirección antigua.", english: "Invoice 2381 has our old address on it." },
+      { kind: "outbound", ago: 280, authorId: VIEWER.id, text: "¡Disculpe! ¿Puede enviarme la dirección nueva?" },
+      {
+        kind: "inbound",
+        ago: 14,
+        text: "Calle Mayor 12, 28013 Madrid. ¿Pueden corregirla hoy? La necesitamos para la auditoría de mañana.",
+        english: "Calle Mayor 12, 28013 Madrid. Can you correct it today? We need it for tomorrow's audit.",
+      },
     ],
+    ai: {
+      insight: { topic: "Billing", urgency: "urgent", urgencyReason: "Needed for an audit tomorrow", mood: "calm", language: "es", summary: "Needs invoice 2381 reissued with the new address today" },
+      suggestion: {
+        kind: "draft",
+        text: "Gracias, Lucía. Hemos corregido la dirección de la factura 2381 a Calle Mayor 12, 28013 Madrid. Puede descargarla ya desde Facturación.",
+        reason: null,
+        sources: [{ type: "knowledge", id: "help-center/edit-invoice", title: "Correct an invoice" }],
+      },
+      replyInTheirLanguage: "Gracias, Lucía. Ya hemos corregido la factura 2381 con la dirección nueva. Puede descargarla desde Facturación.",
+    },
   });
   add({
     channel: "email",
@@ -243,12 +329,64 @@ const FOLLOW_UPS = [
   "Perfect, thank you for the quick answer.",
 ];
 
+/** What the scripted AI says about a message nobody wrote a script for. */
+function scriptedInsight(text: string): TicketInsight {
+  const sentence = text.replace(/\s+/g, " ").trim().split(/(?<=[.!?])\s/)[0] ?? "";
+  return { topic: "other", urgency: "normal", urgencyReason: null, mood: "calm", language: "en", summary: sentence.slice(0, 110) };
+}
+
+const sentences = (text: string) => text.split(/(?<=[.!?])\s+/).filter(Boolean);
+
+/** Stand-ins for the model's rewrites, good enough to show the controls working. */
+const REWRITES = {
+  shorter(text: string) {
+    const paragraphs = text.split(/\n{2,}/);
+    const greeting = /^(hi|hello|hey|dear|hola|gracias)\b[^\n]{0,30}$/i.test(paragraphs[0] ?? "") ? paragraphs.shift()! : null;
+    // Pleasantries go first; then everything after the first paragraph.
+    const filler = /^(thanks|thank you|happy to help|let me know)\b/i;
+    const kept = paragraphs.map((p) => sentences(p).filter((line) => !filler.test(line))).filter((p) => p.length);
+    const first = kept[0] ?? sentences(paragraphs.join(" "));
+    const body = (kept.length > 1 ? first : first.slice(0, Math.max(1, Math.ceil(first.length / 2)))).join(" ");
+    return greeting ? `${greeting}\n\n${body}` : body;
+  },
+  friendlier(text: string) {
+    const closing = "Happy to help with anything else.";
+    const opened = /thanks|thank you|gracias/i.test(text.slice(0, 80)) ? text : text.replace(/^((?:hi|hello|hey)[^\n]*\n\n)?/i, (greeting) => `${greeting}Thanks for reaching out! `);
+    return opened.includes(closing) ? opened : `${opened.trimEnd()}\n\n${closing}`;
+  },
+  formal(text: string) {
+    return text
+      .replace(/^(hi|hey|hello)\b/i, "Dear")
+      .replace(/!/g, ".")
+      .replace(/\bwe'll\b/gi, "we will")
+      .replace(/\bI'll\b/g, "I will")
+      .replace(/\bit's\b/gi, "it is")
+      .replace(/\bhasn't\b/gi, "has not")
+      .replace(/\bcan't\b/gi, "cannot")
+      .replace(/\bdon't\b/gi, "do not")
+      .replace(/\bThanks for\b/g, "Thank you for");
+  },
+};
+
 /** A support client backed by browser memory. `onChange` fires when the customer writes back. */
 /** The agent and portal clients, sharing one in-browser state: a portal request lands in the inbox. */
 export function createDemoClients(onChange: () => void): { agent: SupportClient; portal: SupportPortalClient } {
   ids = 0; // the same ticket ids every time, so links like ?ticket=tkt_1 are stable
   const s = seed();
   const delay = <T,>(value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(value), 120));
+  /** As long as a model takes to answer. */
+  const thinking = <T,>(value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(value), 900));
+  /** What your directory's describeCustomer returns. */
+  const accountFacts = (id: string | null) => {
+    const a = ACCOUNTS.find((x) => x.id === id);
+    if (!a) return [];
+    return [
+      { label: "Plan", value: `${a.plan} · ${a.seats} seats` },
+      { label: "Customer since", value: a.since },
+      { label: "Last order", value: a.lastOrder },
+      ...(a.lastPayout ? [{ label: "Last payout", value: a.lastPayout }] : []),
+    ];
+  };
   const ticket = (id: string) => {
     const t = s.tickets.find((x) => x.id === id);
     if (!t) throw new Error("This ticket doesn't exist.");
@@ -296,8 +434,29 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
       customer: customer(t.customerId),
       assignee: agent(t.assigneeId),
       unread: !read || read < t.lastMessageAt,
+      urgency: s.insights.get(t.id)?.urgency ?? null,
+      summary: s.insights.get(t.id)?.summary ?? null,
+      draftReady: s.suggestions.get(t.id)?.kind === "draft",
     };
   };
+
+  // The scripted AI reads each new customer message a moment after it arrives.
+  const understand = (t: Ticket, text: string, reply: string | null) => {
+    s.suggestions.delete(t.id);
+    setTimeout(() => {
+      s.insights.set(t.id, { ...scriptedInsight(text), topic: s.insights.get(t.id)?.topic ?? "other" });
+      if (s.ai.draftOnArrival) {
+        s.suggestions.set(
+          t.id,
+          reply
+            ? { id: nextId("sug"), kind: "draft", text: reply, reason: null, sources: [{ type: "guidance", id: "guidance", title: "Team guidance" }] }
+            : { id: nextId("sug"), kind: "cannot_answer", text: null, reason: "no help article covers this yet.", sources: [] }
+        );
+      }
+      onChange();
+    }, 1500);
+  };
+  const URGENCY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
 
   // The customer writes back a few seconds after your first reply, so you see the ticket reopen.
   const customerAnswers = (t: Ticket) => {
@@ -305,6 +464,7 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
     t.answered = true;
     setTimeout(() => {
       const at = new Date();
+      understand(t, FOLLOW_UPS[t.number % FOLLOW_UPS.length]!, "You're welcome! I'll mark this as solved. Just reply here if anything else comes up.");
       s.messages.get(t.id)!.push(
         message({
           kind: "inbound",
@@ -335,9 +495,10 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
             .some((v) => v!.toLowerCase().includes(term))
         );
       }
+      const rank = (t: Ticket) => (q.sort === "priority" ? URGENCY_RANK[s.insights.get(t.id)?.urgency ?? "normal"] : 0);
       items.sort((a, b) =>
         q.status === "open"
-          ? +(a.waitingSince ?? a.lastMessageAt) - +(b.waitingSince ?? b.lastMessageAt)
+          ? rank(a) - rank(b) || +(a.waitingSince ?? a.lastMessageAt) - +(b.waitingSince ?? b.lastMessageAt)
           : +b.lastMessageAt - +a.lastMessageAt
       );
       const start = (q.page - 1) * q.pageSize;
@@ -382,12 +543,16 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
         previousTickets: s.tickets
           .filter((x) => x.id !== t.id && x.contact.identities[0]?.value === t.contact.identities[0]?.value)
           .map((x) => ({ id: x.id, number: x.number, subject: x.subject, status: x.status, lastMessageAt: x.lastMessageAt })),
+        accountFacts: accountFacts(t.customerId),
+        insight: s.insights.get(id) ?? null,
+        suggestion: s.suggestions.get(id) ?? null,
       });
     },
 
     async reply({ ticketId, text, attachmentIds, status, cc }) {
       const t = ticket(ticketId);
       const at = new Date();
+      s.suggestions.delete(ticketId);
       s.messages.get(ticketId)!.push(
         message({
           kind: "outbound",
@@ -473,6 +638,86 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
       const q = query.toLowerCase();
       return delay(ACCOUNTS.filter((a) => a.name.toLowerCase().includes(q)).map(({ id, name }) => ({ id, name })));
     },
+
+    ai: {
+      async refine({ ticketId, text, instruction }) {
+        const custom = typeof instruction === "object" ? instruction.custom.toLowerCase() : "";
+        const kind =
+          typeof instruction === "string"
+            ? instruction
+            : /short|brief|concise/.test(custom)
+              ? "shorter"
+              : /formal|professional/.test(custom)
+                ? "formal"
+                : /apolog|sorry/.test(custom)
+                  ? "apology"
+                  : "friendlier";
+        const result =
+          kind === "translate"
+            ? s.localized.get(ticketId) ?? text
+            : kind === "apology"
+              ? text.replace(/^((?:hi|hello|hey|dear)[^\n]*\n\n)?/i, (greeting) => `${greeting}I'm sorry for the trouble. `)
+              : REWRITES[kind](text);
+        return thinking({ text: result });
+      },
+
+      async writeUp({ ticketId, notes }) {
+        const t = ticket(ticketId);
+        const name = t.contact.name?.split(" ")[0];
+        const body = sentences(notes.replace(/\s+/g, " ").trim())
+          .map((line) => line.replace(/^can /i, "we can ").replace(/^no (.+?) yet/i, "we don't have $1 yet").replace(/\bthey\b/g, "you"))
+          .map((line) => line[0]!.toUpperCase() + line.slice(1).replace(/([^.!?])$/, "$1."))
+          .join(" ");
+        return thinking({ text: `${name ? `Hi ${name},` : "Hi,"}\n\nThanks for your patience. ${body}\n\nLet me know if anything is unclear.` });
+      },
+
+      async translate({ messageId }) {
+        const known = s.translations.get(messageId);
+        if (!known) throw new Error("The demo only translates its own sample messages.");
+        return thinking({ text: known });
+      },
+
+      async draft({ ticketId }) {
+        const t = ticket(ticketId);
+        const last = s.messages.get(ticketId)!.filter((m) => m.kind === "inbound").at(-1);
+        s.suggestions.set(ticketId, {
+          id: nextId("sug"),
+          kind: "draft",
+          text: `${t.contact.name ? `Hi ${t.contact.name.split(" ")[0]},` : "Hi,"}\n\nThanks for your message. I'm looking into this now and will come back to you shortly.`,
+          reason: null,
+          sources: [{ type: "guidance", id: "guidance", title: "Team guidance" }],
+        });
+        if (last && !s.insights.has(ticketId)) s.insights.set(ticketId, scriptedInsight(last.text));
+        return thinking({ ok: true });
+      },
+
+      async discardSuggestion({ id }) {
+        for (const [ticketId, suggestion] of s.suggestions) if (suggestion.id === id) s.suggestions.delete(ticketId);
+        return delay({ ok: true });
+      },
+
+      async setInsight({ ticketId, topic, urgency }) {
+        const current = s.insights.get(ticketId) ?? scriptedInsight("");
+        if (urgency && urgency !== current.urgency) event(ticketId, "insight_changed", { urgency: { from: current.urgency, to: urgency } });
+        if (topic && topic !== current.topic) event(ticketId, "insight_changed", { topic: { from: current.topic, to: topic } });
+        s.insights.set(ticketId, { ...current, ...(topic ? { topic } : {}), ...(urgency ? { urgency, urgencyReason: null } : {}) });
+        return delay({ ok: true });
+      },
+
+      async getSettings() {
+        return delay({ ...s.ai, topics: [...s.ai.topics], sources: s.ai.sources.map((source) => ({ ...source })) });
+      },
+
+      async updateSettings(patch) {
+        s.ai = { ...s.ai, ...patch };
+        return delay({ ok: true });
+      },
+
+      async syncKnowledge() {
+        s.ai.sources = s.ai.sources.map((source) => ({ ...source, syncedAt: new Date() }));
+        return thinking({ ok: true });
+      },
+    },
   };
 
   // The customer portal, as Emma Clarke of Northwind Coffee sees it.
@@ -534,6 +779,7 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
       });
       s.messages.set(id, [message({ kind: "inbound", text, createdAt: at, source: "portal", from: { address: CUSTOMER.email, name: CUSTOMER.name } })]);
       s.events.set(id, []);
+      understand(s.tickets.at(-1)!, `${subject}. ${text}`, null);
       onChange();
       return delay({ id });
     },
@@ -547,6 +793,7 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
       t.waitingSince = t.waitingSince ?? at;
       t.lastMessageAt = at;
       t.answered = true;
+      understand(t, text, null);
       onChange();
       return delay({ ok: true });
     },

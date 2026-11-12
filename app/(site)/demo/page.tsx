@@ -221,7 +221,7 @@ function Customize({
       <div className="flex items-start justify-between gap-3">
         <div>
           <Label htmlFor="account-panel">Account panel</Label>
-          <p className="mt-1 text-xs text-muted-foreground">customerPanel: your data next to each ticket.</p>
+          <p className="mt-1 text-xs text-muted-foreground">customerPanel: your own component next to each ticket.</p>
         </div>
         <Switch id="account-panel" checked={settings.accountPanel} onCheckedChange={(v) => onSettings({ accountPanel: v })} />
       </div>

@@ -24,6 +24,7 @@ import { AgentAvatar, AttachmentChip, EmailFrame, MessageText, StatusBadge, Unkn
 import { SupportComposer } from "./support-composer";
 import { LinkCustomerDialog } from "./link-customer-dialog";
 import { ChangeContactDialog } from "./change-contact-dialog";
+import { TicketInsightBar, foreignLanguage, languageName, useMessageTranslation } from "./ai";
 
 /** One ticket: the conversation, the reply box, and the customer next to it. */
 export function SupportTicket({ ticketId }: { ticketId: string }) {
@@ -69,6 +70,7 @@ export function SupportTicket({ ticketId }: { ticketId: string }) {
           <h1 dir="auto" className="mt-1 text-2xl font-semibold tracking-tight break-words">
             {detail.ticket.subject || t("inbox.noSubject")}
           </h1>
+          <TicketInsightBar detail={detail} />
         </div>
         <TicketControls detail={detail} agents={agents.data ?? []} />
       </div>
@@ -254,6 +256,12 @@ function describeEvent(event: TimelineEvent, t: ReturnType<typeof useSupport>["t
       return t("ticket.events.followUp", { number: String(event.data.number) });
     case "contact_changed":
       return t("ticket.events.contactChanged", { actor, address: String(event.data.address ?? "") });
+    case "insight_changed": {
+      const urgency = (event.data.urgency as { to?: string } | undefined)?.to;
+      const topic = (event.data.topic as { to?: string } | undefined)?.to;
+      if (urgency) return t("ticket.events.urgencyChanged", { actor, urgency: t(`ai.urgency.${urgency}`) });
+      return t("ticket.events.topicChanged", { actor, topic: !topic || topic === "other" ? t("ai.otherTopic") : topic });
+    }
     case "forwarded": {
       const from = event.data.from as { address: string; name?: string | null } | undefined;
       return t("ticket.events.forwarded", { actor: agentName(event.actorId) ?? from?.name ?? from?.address ?? actor });
@@ -277,6 +285,7 @@ function MessageCard({
   const { client, t, locale } = useSupport();
   const [original, setOriginal] = useState(false);
   const retry = useTicketMutation(detail.ticket.id, () => client.retry({ messageId: message.id }));
+  const translation = useMessageTranslation(message.id);
 
   if (message.auto && message.kind === "outbound") {
     return <p className="px-2 py-1 text-center text-xs text-muted-foreground">{t("ticket.autoReplySent")} · {formatWhen(message.createdAt, locale)}</p>;
@@ -295,6 +304,8 @@ function MessageCard({
     ((message.fullText !== null && message.fullText.trim() !== message.text.trim()) ||
       (message.html !== null && /<(table|img)\b/i.test(message.html)));
   const failed = message.deliveryStatus === "failed";
+  // Offered only when the customer writes in another language than the agent reads.
+  const foreign = client.ai && message.kind === "inbound" ? foreignLanguage(detail, locale) : null;
 
   return (
     <article
@@ -317,7 +328,9 @@ function MessageCard({
         </time>
       </header>
 
-      {original && message.html ? (
+      {translation.text !== null ? (
+        <MessageText text={translation.text} />
+      ) : original && message.html ? (
         <EmailFrame html={message.html} showImagesLabel={t("ticket.showImages")} />
       ) : (
         <MessageText text={original && message.fullText ? message.fullText : message.text} />
@@ -331,9 +344,18 @@ function MessageCard({
         </div>
       )}
 
-      {(hasMore || failed) && (
+      {(hasMore || failed || foreign) && (
         <footer className="mt-3 flex flex-wrap items-center gap-3 text-xs">
-          {hasMore && (
+          {foreign && (
+            <span className="inline-flex items-center gap-2 text-muted-foreground">
+              {translation.text !== null && <span>{t("ai.translatedFrom", { language: languageName(foreign, locale) })}</span>}
+              <button type="button" className="underline underline-offset-2 hover:text-foreground disabled:opacity-60" disabled={translation.pending} onClick={translation.toggle}>
+                {translation.text !== null ? t("ai.showUntranslated") : t("ai.translate")}
+              </button>
+              {translation.failed && <span className="text-destructive">{t("ai.failed")}</span>}
+            </span>
+          )}
+          {hasMore && translation.text === null && (
             <button type="button" className="text-muted-foreground underline underline-offset-2 hover:text-foreground" onClick={() => setOriginal((v) => !v)}>
               {original ? t("ticket.showReply") : t("ticket.showOriginal")}
             </button>
@@ -395,6 +417,28 @@ function CustomerSidebar({ detail }: { detail: TicketDetail }) {
           </div>
         )}
       </section>
+
+      {detail.accountFacts && detail.accountFacts.length > 0 && (
+        <section className="rounded-xl border bg-card p-4">
+          <h2 className="text-xs font-medium text-muted-foreground">{detail.customer?.name ?? t("ticket.account")}</h2>
+          <dl className="mt-2 space-y-1.5 text-sm">
+            {detail.accountFacts.map((fact) => (
+              <div key={fact.label} className="flex justify-between gap-3">
+                <dt className="shrink-0 text-muted-foreground">{fact.label}</dt>
+                <dd dir="auto" className="min-w-0 text-end break-words tabular-nums">
+                  {fact.url ? (
+                    <a href={fact.url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
+                      {fact.value}
+                    </a>
+                  ) : (
+                    fact.value
+                  )}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      )}
 
       {detail.previousTickets.length > 0 && (
         <section className="rounded-xl border bg-card p-4">

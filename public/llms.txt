@@ -8,7 +8,7 @@ Tendkit targets Next.js (App Router), Tailwind 4, shadcn/ui, TanStack Query and 
 
 `npx shadcn@latest add https://tendkit.softwaresavants.dev/r/support.json https://tendkit.softwaresavants.dev/r/support-postgres.json https://tendkit.softwaresavants.dev/r/support-ui.json https://tendkit.softwaresavants.dev/r/channel-resend.json`
 
-Registry items: support (core), support-postgres, support-d1, support-ui, channel-resend, channel-microsoft365, channel-gmail, channel-smtp, channel-twilio, channel-whatsapp, channel-telegram, channel-api. Each is at https://tendkit.softwaresavants.dev/r/<item>.json.
+Registry items: support (core), support-postgres, support-d1, support-ai (optional AI engine), support-ai-postgres, support-ai-d1, support-ui, channel-resend, channel-microsoft365, channel-gmail, channel-smtp, channel-twilio, channel-whatsapp, channel-telegram, channel-api. Each is at https://tendkit.softwaresavants.dev/r/<item>.json.
 
 ## How to integrate (for coding agents)
 
@@ -18,7 +18,8 @@ Registry items: support (core), support-postgres, support-d1, support-ui, channe
 4. Implement the SupportDirectory: identify (sender to user and customer/account), searchCustomers, getCustomers, listAgents. This is the only product-specific part.
 5. Route POST /api/webhooks/support/[channel] to support().handleWebhook(channel, request). Call support().runScheduled() from a cron every few minutes.
 6. Expose the agent methods (listTickets, getTicket, reply, addNote, assign, setStatus, linkCustomer, changeContact, uploadAttachment, attachmentUrl, counts, listAgents, searchCustomers) and support().portal through the app's own API behind its own auth; implement SupportClient with them and render SupportInbox/SupportTicket inside SupportProvider.
-7. For email: use a receiving subdomain (e.g. in.acme.com) for the reply address, keep the main mailbox where it is, and copy mail to the receiving address. The Resend adapter needs a Full access API key to read received mail.
+7. Optional AI (triage, one-line summaries, suggested replies; agents always review and send): add support-ai-postgres or support-ai-d1, export the ai-schema and migrate, then pass ai: supportAi({ model, store: createPostgresAiStore(db), knowledge: [docsFromUrl("https://…/llms-full.txt")], defer }) to createSupport. model is any Vercel AI SDK LanguageModel; Tendkit imports only the "ai" package. Add describeCustomer(customerId) to the directory for account facts. Expose support().ai (refine, writeUp, translate, draft, discardSuggestion, setInsight, getSettings, updateSettings, syncKnowledge, listKnowledgeSources) and put the same methods under ai on the SupportClient; map the inbox's sort: "priority" to listTickets. Customer messages go to the configured model provider.
+8. For email: use a receiving subdomain (e.g. in.acme.com) for the reply address, keep the main mailbox where it is, and copy mail to the receiving address. The Resend adapter needs a Full access API key to read received mail.
 
 ## Docs
 
@@ -30,6 +31,7 @@ Registry items: support (core), support-postgres, support-d1, support-ui, channe
 - [Inbox and tickets](https://tendkit.softwaresavants.dev/docs/screens): SupportClient, SupportProvider props, translations
 - [Customer portal](https://tendkit.softwaresavants.dev/docs/portal)
 - [Theming](https://tendkit.softwaresavants.dev/docs/theming)
+- [AI](https://tendkit.softwaresavants.dev/docs/ai): supportAi options, providers, knowledge sources, account facts, deferral, client.ai, privacy
 - [Email setup](https://tendkit.softwaresavants.dev/docs/email): receiving domains, threading, trimming, automatic mail, authentication
 - [Channels](https://tendkit.softwaresavants.dev/docs/channels): resend, microsoft365, gmail, smtp, twilio, whatsapp, telegram, api, and writing your own (/docs/channels/<name>)
 - [Upgrading](https://tendkit.softwaresavants.dev/docs/upgrading)

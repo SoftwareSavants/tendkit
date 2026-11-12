@@ -172,6 +172,13 @@ function buildStore(db: Db, created: Created | null): SupportStore {
       const order =
         query.sort === "waiting"
           ? [sql`${supportTickets.waitingSince} asc nulls last`, desc(supportTickets.lastMessageAt)]
+          : query.sort === "priority"
+            ? [
+                // Raw SQL, so this file doesn't depend on the AI schema. Tickets without an insight count as normal.
+                sql`coalesce((select urgency_rank from support_ticket_insights where support_ticket_insights.ticket_id = ${supportTickets.id}), 2) asc`,
+                sql`${supportTickets.waitingSince} asc nulls last`,
+                desc(supportTickets.lastMessageAt),
+              ]
           : query.sort === "solved"
             ? [sql`${supportTickets.solvedAt} desc nulls last`]
             : [desc(supportTickets.lastMessageAt)];

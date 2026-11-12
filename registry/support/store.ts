@@ -114,7 +114,8 @@ export type TicketQuery = {
   search?: string;
   /** Customers whose name matched the search, resolved by the directory. */
   searchCustomerIds?: string[];
-  sort: "waiting" | "recent" | "solved";
+  /** "priority": most urgent first (from Copilot's insights; needs the AI tables), then longest waiting. */
+  sort: "waiting" | "recent" | "solved" | "priority";
   limit: number;
   offset: number;
 };

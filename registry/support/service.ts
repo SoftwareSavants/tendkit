@@ -20,6 +20,7 @@ import {
 } from "./text";
 import type { SupportStore, TicketQuery } from "./store";
 import type {
+  AccountFact,
   Address,
   Agent,
   Attachment,
@@ -28,9 +29,12 @@ import type {
   DeliveryStatus,
   Identity,
   Message,
+  Suggestion,
   Ticket,
   TicketEvent,
+  TicketInsight,
   TicketStatus,
+  Urgency,
 } from "./types";
 
 /** Where attachment bytes live: S3, R2, Supabase Storage, a disk. */
@@ -53,6 +57,41 @@ export interface SupportDirectory {
   searchCustomers(query: string): Promise<CustomerSummary[]>;
   getCustomers(ids: string[]): Promise<CustomerSummary[]>;
   listAgents(): Promise<Agent[]>;
+  /**
+   * Optional: a few lines about a customer's account (plan, balance, open orders) for the
+   * ticket's Customer card and, with Copilot, for drafting that customer's replies.
+   */
+  describeCustomer?(customerId: string): Promise<AccountFact[]>;
+}
+
+/**
+ * What `ai.ts` plugs into the service. The core never imports an AI SDK: apps that don't
+ * configure `ai` don't install one.
+ */
+export interface SupportAiPlugin<Api = unknown> {
+  attach(context: SupportAiContext): SupportAiEngine<Api>;
+}
+
+export type SupportAiContext = {
+  store: SupportStore;
+  /** The channel's reply limits, or null when it's no longer configured. */
+  channel(id: string): { kind: Channel["kind"]; maxTextLength: number | null } | null;
+  /** The customer's account facts, [] when the directory has none. Never throws. */
+  accountFacts(customerId: string): Promise<AccountFact[]>;
+  now: () => Date;
+  log: NonNullable<SupportOptions["log"]>;
+};
+
+export interface SupportAiEngine<Api = unknown> {
+  /** The `ai` methods on the support object. */
+  api: Api;
+  /** A customer wrote (not automated mail, not your team). Must not throw. */
+  messageReceived(input: { ticket: Ticket; message: Message }): Promise<void>;
+  /** An agent's reply went out. Must not throw. */
+  replySent(input: { ticketId: string; suggestionId: string | null; message: Message; text: string }): Promise<void>;
+  ticketDetail(ticketId: string): Promise<{ insight: TicketInsight | null; suggestion: Suggestion | null }>;
+  listDetails(ticketIds: string[]): Promise<Map<string, { urgency: Urgency | null; summary: string | null; draftReady: boolean }>>;
+  runScheduled(): Promise<Record<string, unknown>>;
 }
 
 export type SupportNotification =
@@ -61,7 +100,10 @@ export type SupportNotification =
   | { type: "ticket.assigned"; ticket: Ticket; assigneeId: string; actorId: string }
   | { type: "message.failed"; ticket: Ticket; message: Message };
 
-export type SupportOptions = {
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyAiPlugin = SupportAiPlugin<any>;
+
+export type SupportOptions<Ai extends AnyAiPlugin | undefined = AnyAiPlugin | undefined> = {
   store: SupportStore;
   storage: AttachmentStorage;
   channels: Channel[];
@@ -110,6 +152,8 @@ export type SupportOptions = {
   /** Days after solving during which a customer reply reopens the ticket. Later replies start a new one. */
   reopenWindowDays?: number;
   maxAttachmentBytes?: number;
+  /** Copilot: `supportAi({ model, store, … })` from `ai.ts`. Leave it out and nothing changes. */
+  ai?: Ai;
   now?: () => Date;
   log?: (level: "info" | "warn" | "error", message: string, data?: Record<string, unknown>) => void;
 };
@@ -121,6 +165,11 @@ export type TicketListItem = Ticket & {
   customer: CustomerSummary | null;
   assignee: Agent | null;
   unread: boolean;
+  /** Copilot's view, when configured: null otherwise. */
+  urgency: Urgency | null;
+  summary: string | null;
+  /** Copilot drafted a reply that nobody has used or discarded yet. */
+  draftReady: boolean;
 };
 
 export type TimelineEntry =
@@ -139,6 +188,11 @@ export type TicketDetail = {
   /** Who a reply goes to by default. Agents can change `cc` when they reply. */
   recipients: { to: Address | null; cc: Address[] };
   previousTickets: Pick<Ticket, "id" | "number" | "subject" | "status" | "lastMessageAt">[];
+  /** From `directory.describeCustomer`, for tickets linked to a customer. */
+  accountFacts: AccountFact[];
+  /** Copilot, when configured: what it understood, and its latest pending suggestion. */
+  insight: TicketInsight | null;
+  suggestion: Suggestion | null;
 };
 
 export type PortalTicket = Pick<
@@ -170,7 +224,7 @@ export class SupportError extends Error {
 
 class Duplicate extends Error {}
 
-export function createSupport(options: SupportOptions) {
+export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(options: SupportOptions<Ai>) {
   const { store, storage, directory } = options;
   const now = options.now ?? (() => new Date());
   const reopenWindowMs = (options.reopenWindowDays ?? 14) * DAY;
@@ -198,6 +252,36 @@ export function createSupport(options: SupportOptions) {
       await options.notify?.(n);
     } catch (error) {
       log("error", "notification failed", { type: n.type, error: String(error) });
+    }
+  };
+
+  const accountFacts = async (customerId: string): Promise<AccountFact[]> => {
+    if (!directory.describeCustomer) return [];
+    try {
+      return (await directory.describeCustomer(customerId)) ?? [];
+    } catch (error) {
+      log("warn", "directory.describeCustomer failed", { error: String(error) });
+      return [];
+    }
+  };
+
+  const ai = options.ai?.attach({
+    store,
+    channel: (id) => {
+      const ch = channel(id);
+      return ch ? { kind: ch.kind, maxTextLength: ch.capabilities.maxTextLength } : null;
+    },
+    accountFacts,
+    now,
+    log,
+  });
+  /** Hands a customer's message to Copilot. Ingestion never fails because of it. */
+  const aiMessageReceived = async (ticket: Ticket, message: Message) => {
+    if (!ai) return;
+    try {
+      await ai.messageReceived({ ticket, message });
+    } catch (error) {
+      log("error", "ai: message hand-off failed", { ticketId: ticket.id, error: String(error) });
     }
   };
 
@@ -545,6 +629,8 @@ export function createSupport(options: SupportOptions) {
     // A hand-off is new work for the team. An email the teammate started is waiting on the customer.
     if (outcome.customerMessage) {
       await safeNotify({ type: "ticket.created", ticket: outcome.ticket, message: { ...outcome.customerMessage, attachments: [] }, contact });
+      // A forwarded email still waits for its answer; one the teammate wrote to the customer doesn't.
+      if (forwarded) await aiMessageReceived(outcome.ticket, { ...outcome.customerMessage, attachments: [] });
     }
     return { result: "created" as const, ticketId: outcome.ticket.id };
   }
@@ -673,6 +759,7 @@ export function createSupport(options: SupportOptions) {
         contact,
       });
       if (outcome.created && ch.kind === "email" && trusted) await sendAcknowledgement(ch, outcome.ticket, contact, message);
+      await aiMessageReceived(outcome.ticket, message);
     }
     return { result: outcome.created ? ("created" as const) : ("appended" as const), ticketId: outcome.ticket.id };
   }
@@ -878,6 +965,8 @@ export function createSupport(options: SupportOptions) {
     status?: ReplyStatus;
     /** Who to copy, replacing the default from `recipients.cc`. Email only. */
     cc?: Address[];
+    /** The Copilot suggestion this reply started from, to record whether it was used as is. */
+    suggestionId?: string | null;
   }) {
     const text = input.text.trim();
     if (!text) throw new SupportError("invalid", "Write a message first.");
@@ -953,6 +1042,13 @@ export function createSupport(options: SupportOptions) {
       });
     }
     await store.markRead(ticket.id, input.agentId, at);
+    if (ai) {
+      try {
+        await ai.replySent({ ticketId: ticket.id, suggestionId: input.suggestionId ?? null, message, text });
+      } catch (error) {
+        log("error", "ai: recording the reply failed", { ticketId: ticket.id, error: String(error) });
+      }
+    }
     return { message, ticket: updated };
   }
 
@@ -1151,11 +1247,14 @@ export function createSupport(options: SupportOptions) {
     const searchCustomerIds = query.search?.trim()
       ? (await directory.searchCustomers(query.search.trim()).catch(() => [])).map((c) => c.id)
       : undefined;
-    const { items, total } = await store.listTickets({ ...query, searchCustomerIds });
+    // Priority needs Copilot's insights; without them it's the longest wait first.
+    const sort = query.sort === "priority" && !ai ? "waiting" : query.sort;
+    const { items, total } = await store.listTickets({ ...query, sort, searchCustomerIds });
     const contacts = await store.getContacts([...new Set(items.map((t) => t.contactId))]);
     const customers = await directory.getCustomers([...new Set(items.map((t) => t.customerId).filter((id): id is string => Boolean(id)))]);
     const agents = await agentsById();
     const reads = await store.getReadTimes(items.map((t) => t.id), viewerId);
+    const insights = ai ? await ai.listDetails(items.map((t) => t.id)) : new Map();
     const contactsById = new Map(contacts.map((c) => [c.id, c]));
     const customersById = new Map(customers.map((c) => [c.id, c]));
     const list: TicketListItem[] = items.map((ticket) => {
@@ -1167,6 +1266,9 @@ export function createSupport(options: SupportOptions) {
         customer: ticket.customerId ? customersById.get(ticket.customerId) ?? null : null,
         assignee: ticket.assigneeId ? agents.get(ticket.assigneeId) ?? null : null,
         unread: Boolean(ticket.lastInboundAt && (!readAt || readAt < ticket.lastInboundAt)),
+        urgency: insights.get(ticket.id)?.urgency ?? null,
+        summary: insights.get(ticket.id)?.summary ?? null,
+        draftReady: insights.get(ticket.id)?.draftReady ?? false,
       };
     });
     return { items: list, total };
@@ -1183,6 +1285,8 @@ export function createSupport(options: SupportOptions) {
     const previous = ticket.customerId
       ? await store.listTickets({ customerId: ticket.customerId, sort: "recent", limit: 6, offset: 0 })
       : { items: [] as Ticket[], total: 0 };
+    const facts = ticket.customerId ? await accountFacts(ticket.customerId) : [];
+    const copilot = ai ? await ai.ticketDetail(ticket.id) : { insight: null, suggestion: null };
     await store.markRead(ticket.id, viewerId, now());
     const ch = channel(ticket.channelId);
     const recipients =
@@ -1206,6 +1310,9 @@ export function createSupport(options: SupportOptions) {
         .filter((t) => t.id !== ticket.id)
         .slice(0, 5)
         .map(({ id, number, subject, status, lastMessageAt }) => ({ id, number, subject, status, lastMessageAt })),
+      accountFacts: facts,
+      insight: copilot.insight,
+      suggestion: copilot.suggestion,
     };
   }
 
@@ -1355,6 +1462,7 @@ export function createSupport(options: SupportOptions) {
       });
       const fresh = (await store.getContact(contact.id))!;
       await safeNotify({ type: "ticket.created", ticket: result.ticket, message: { ...result.message, attachments: [] }, contact: fresh });
+      await aiMessageReceived(result.ticket, { ...result.message, attachments: [] });
       return { id: result.ticket.id };
     },
 
@@ -1381,6 +1489,7 @@ export function createSupport(options: SupportOptions) {
       await store.markRead(ticket.id, input.userId, at);
       const contact = (await store.getContact(ticket.contactId))!;
       await safeNotify({ type: "ticket.customer_replied", ticket: updated, message: { ...message, attachments: [] }, contact });
+      await aiMessageReceived(updated, { ...message, attachments: [] });
       return { id: message.id };
     },
   };
@@ -1468,7 +1577,16 @@ export function createSupport(options: SupportOptions) {
     for (const message of stale) {
       await store.updateMessage(message.id, { deliveryStatus: "failed", deliveryError: "Sending didn't finish. Try again." });
     }
-    return { channels: summary, staleFailed: stale.length };
+    let aiSummary: Record<string, unknown> | undefined;
+    if (ai) {
+      try {
+        aiSummary = await ai.runScheduled();
+      } catch (error) {
+        log("error", "ai: scheduled work failed", { error: String(error) });
+        aiSummary = { error: String(error) };
+      }
+    }
+    return { channels: summary, staleFailed: stale.length, ...(aiSummary ? { ai: aiSummary } : {}) };
   }
 
   return {
@@ -1491,6 +1609,8 @@ export function createSupport(options: SupportOptions) {
     searchCustomers: (query: string) => directory.searchCustomers(query),
     listAgents: () => directory.listAgents(),
     portal,
+    /** Copilot's methods, when `ai` is configured. */
+    ai: ai?.api as Ai extends SupportAiPlugin<infer Api> ? Api : undefined,
   };
 }
 

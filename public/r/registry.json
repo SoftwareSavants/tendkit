@@ -45,7 +45,7 @@
       "name": "support-postgres",
       "type": "registry:item",
       "title": "Postgres store",
-      "description": "Drizzle schema, a starting migration and the store for Postgres (Supabase, Neon, RDS, PGlite…).",
+      "description": "Drizzle schema, a starting migration and the store for Postgres (Supabase, Neon, RDS, PGlite\u2026).",
       "dependencies": [
         "drizzle-orm@^0.45"
       ],
@@ -96,6 +96,95 @@
           "path": "registry/support/d1/migrations/0000_init.sql",
           "type": "registry:file",
           "target": "~/lib/support/d1/0000_init.sql"
+        }
+      ]
+    },
+    {
+      "name": "support-ai",
+      "type": "registry:item",
+      "title": "Support AI",
+      "description": "Optional AI for the inbox: triage, summaries and suggested replies from your docs, with any Vercel AI SDK model.",
+      "dependencies": [
+        "ai@^7"
+      ],
+      "registryDependencies": [
+        "https://tendkit.softwaresavants.dev/r/support.json"
+      ],
+      "files": [
+        {
+          "path": "registry/support/ai.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/ai.ts"
+        },
+        {
+          "path": "registry/support/ai-store.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/ai-store.ts"
+        },
+        {
+          "path": "registry/support/knowledge.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/knowledge.ts"
+        }
+      ]
+    },
+    {
+      "name": "support-ai-postgres",
+      "type": "registry:item",
+      "title": "Support AI store for Postgres",
+      "description": "Drizzle schema, migration and store for the AI tables on Postgres.",
+      "dependencies": [
+        "drizzle-orm@^0.45"
+      ],
+      "registryDependencies": [
+        "https://tendkit.softwaresavants.dev/r/support-ai.json",
+        "https://tendkit.softwaresavants.dev/r/support-postgres.json"
+      ],
+      "files": [
+        {
+          "path": "registry/support/postgres/ai-schema.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/postgres/ai-schema.ts"
+        },
+        {
+          "path": "registry/support/postgres/ai-store.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/postgres/ai-store.ts"
+        },
+        {
+          "path": "registry/support/postgres/migrations/0001_ai.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/postgres/0001_ai.sql"
+        }
+      ]
+    },
+    {
+      "name": "support-ai-d1",
+      "type": "registry:item",
+      "title": "Support AI store for SQLite / Cloudflare D1",
+      "description": "Drizzle schema, migration and store for the AI tables on SQLite and Cloudflare D1.",
+      "dependencies": [
+        "drizzle-orm@^0.45"
+      ],
+      "registryDependencies": [
+        "https://tendkit.softwaresavants.dev/r/support-ai.json",
+        "https://tendkit.softwaresavants.dev/r/support-d1.json"
+      ],
+      "files": [
+        {
+          "path": "registry/support/d1/ai-schema.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/d1/ai-schema.ts"
+        },
+        {
+          "path": "registry/support/d1/ai-store.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/d1/ai-store.ts"
+        },
+        {
+          "path": "registry/support/d1/migrations/0001_ai.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/d1/0001_ai.sql"
         }
       ]
     },
@@ -268,7 +357,7 @@
       "name": "support-ui",
       "type": "registry:item",
       "title": "Support screens",
-      "description": "Inbox, ticket, composer and customer portal screens built on your shadcn components.",
+      "description": "Inbox, ticket, composer and customer portal screens built on your shadcn components, with optional AI controls.",
       "dependencies": [
         "@tanstack/react-query@^5",
         "dompurify@^3",
@@ -282,7 +371,8 @@
         "select",
         "dialog",
         "dropdown-menu",
-        "skeleton"
+        "skeleton",
+        "switch"
       ],
       "files": [
         {
@@ -319,6 +409,16 @@
           "path": "registry/support-ui/support-composer.tsx",
           "type": "registry:file",
           "target": "~/components/support/support-composer.tsx"
+        },
+        {
+          "path": "registry/support-ui/ai.tsx",
+          "type": "registry:file",
+          "target": "~/components/support/ai.tsx"
+        },
+        {
+          "path": "registry/support-ui/support-ai-settings.tsx",
+          "type": "registry:file",
+          "target": "~/components/support/support-ai-settings.tsx"
         },
         {
           "path": "registry/support-ui/link-customer-dialog.tsx",

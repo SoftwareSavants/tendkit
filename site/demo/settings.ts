@@ -1,6 +1,6 @@
 /** The demo's screen props, shared between /demo (the controls) and /demo-frame (the app). */
 export type DemoSettings = { responseTargetMinutes: number; accountPanel: boolean };
-export const DEFAULT_SETTINGS: DemoSettings = { responseTargetMinutes: 240, accountPanel: true };
+export const DEFAULT_SETTINGS: DemoSettings = { responseTargetMinutes: 240, accountPanel: false };
 export const RESPONSE_TARGETS = [
   { minutes: 30, label: "30 min" },
   { minutes: 60, label: "1 hour" },

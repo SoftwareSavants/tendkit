@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Code } from "@/site/code";
 import { Callout, DocsShell, H2, Props } from "@/site/docs/shell";
 
@@ -67,6 +68,7 @@ export default function Directory() {
           { name: "searchCustomers", type: "(query) => { id, name }[]", required: true, description: "Powers the link-to-customer picker and inbox search." },
           { name: "getCustomers", type: "(ids) => { id, name }[]", required: true, description: "Names for the customers shown in the inbox." },
           { name: "listAgents", type: "() => { id, name, email? }[]", required: true, description: "Who can be assigned. The agent id is what your API passes as agentId. With an email, their own email to the support address counts as your team's." },
+          { name: "describeCustomer", type: "(customerId) => { label, value, url? }[]", description: <>A few lines about the account (plan, balance, last order), shown in the ticket&apos;s sidebar and used by <Link href="/docs/ai#account-facts">AI</Link>. Only called for tickets linked to a customer.</> },
         ]}
       />
       <p>

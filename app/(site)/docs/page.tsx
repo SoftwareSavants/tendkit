@@ -12,6 +12,7 @@ const ITEMS = [
   ["support", "The engine: tickets, threading, automatic-mail detection, notifications and the service your API calls."],
   ["support-postgres", "Drizzle schema, migration and store for Postgres."],
   ["support-d1", "The same for SQLite and Cloudflare D1, without transactions."],
+  ["support-ai-*", "Optional AI: triage, summaries and suggested replies, with any AI SDK model."],
   ["support-ui", "The inbox, ticket, composer, customer linking and customer portal screens."],
   ["channel-*", "One adapter per provider: Resend, Microsoft 365, Gmail, SMTP/IMAP, Twilio, WhatsApp, Telegram and a signed API."],
 ];

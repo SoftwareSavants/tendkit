@@ -13,9 +13,10 @@ Tendkit is an open-source (MIT) customer support kit distributed as a **shadcn r
 | `registry/support/` | The engine: `service.ts` (`createSupport`), `store.ts`, `channel.ts`, `types.ts`, `text.ts` (reply trimming, signatures, automated-mail detection), `address.ts` |
 | `registry/support/postgres/`, `registry/support/d1/` | Drizzle schema, migration and store for each database. D1 has no transactions: its store deletes what it created if a later write fails. |
 | `registry/support/channels/` | One file per adapter: resend, microsoft365, gmail, smtp (+ `mime.ts`), twilio, whatsapp, telegram, api, plus `crypto.ts` |
-| `registry/support-ui/` | The screens: inbox, ticket, composer, link-customer dialog, portal (`support-requests.tsx`), `provider.tsx`, `client.ts` (the `SupportClient` contract), `messages/en.json` |
+| `registry/support/ai.ts`, `ai-store.ts`, `knowledge.ts` | Optional AI ("Copilot"): `supportAi()` plugs into `createSupport({ ai })`. Triage, suggested replies, refine, knowledge sync. `ai.ts` is the only file that imports the `ai` package; `service.ts` never does. Stores and migrations are `postgres/ai-*` and `d1/ai-*` (`0001_ai.sql`). Model calls never run inside a store transaction. |
+| `registry/support-ui/` | The screens: inbox, ticket, composer, link-customer dialog, portal (`support-requests.tsx`), the AI parts (`ai.tsx`, `support-ai-settings.tsx`, shown only when the client has `ai`), `provider.tsx`, `client.ts` (the `SupportClient` contract), `messages/en.json` |
 | `registry.json` → `public/r/` | Registry items, built by `pnpm registry:build`. **Commit `public/r`**; CI fails if it's stale. |
-| `tests/` | Vitest. The service suite runs on PGlite and again on SQLite/D1 (`TENDKIT_STORE=d1`). Adapters are tested against recorded payloads. |
+| `tests/` | Vitest. The service and AI suites run on PGlite and again on SQLite/D1 (`TENDKIT_STORE=d1`). AI tests use the AI SDK's mock model (`ai/test`). Adapters are tested against recorded payloads. |
 | `app/(site)/`, `site/` | The website (Next.js static export). `site/docs/nav.ts` drives the docs sidebar, prev/next and ⌘K search; adapter docs pages are generated from `site/docs/channels-data.tsx`. |
 | `site/demo-client.ts` | The demo's in-browser backend (agent and portal clients sharing one state). `app/demo-frame/` is the app inside the demo's iframe. |
 | `site/wall.tsx` | The home page's wall of working cards. |

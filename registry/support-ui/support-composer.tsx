@@ -1,14 +1,15 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Paperclip, Plus, X } from "lucide-react";
+import { Loader2, Paperclip, Plus, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useSupport } from "./provider";
 import type { Address, FileInfo, TicketDetail } from "./client";
 import { contactLabel, formatBytes } from "./format";
+import { DraftBar, RefineRow, foreignLanguage, type RefineAction } from "./ai";
 
 type Mode = "reply" | "note";
 
@@ -45,18 +46,104 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
     setCcDraft(null);
   };
 
+  // AI, when the client has it: the suggested reply, rewrites of what's in the box, and Undo.
+  const ai = client.ai;
+  const suggestion = ai && !blocked ? detail.suggestion ?? null : null;
+  const [discarded, setDiscarded] = useState<string | null>(null);
+  const draft = suggestion?.kind === "draft" && suggestion.text && suggestion.id !== discarded ? suggestion : null;
+  /** The suggestion the text in the box started from. */
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [history, setHistory] = useState<string[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const offered = useRef<string | null>(null);
+  const applied = Boolean(draft && draftId === draft.id && text.trim());
+  const lastMessage = detail.timeline.filter((e) => e.type === "message" && e.message.kind !== "note" && !e.message.auto).at(-1);
+  const canSuggest = Boolean(ai && !blocked && !suggestion && lastMessage?.type === "message" && lastMessage.message.kind === "inbound");
+
+  const applyDraft = () => {
+    if (!draft) return;
+    if (text.trim()) setHistory((h) => [...h, text]);
+    setText(draft.text ?? "");
+    setDraftId(draft.id);
+    setMode("reply");
+  };
+  // A suggestion fills an empty reply box once. Text the agent already wrote is never replaced.
+  useEffect(() => {
+    if (!draft || offered.current === draft.id) return;
+    offered.current = draft.id;
+    if (!text.trim() && mode === "reply") {
+      setText(draft.text ?? "");
+      setDraftId(draft.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft?.id]);
+
+  const discardDraft = () => {
+    if (!draft || !ai) return;
+    if (applied) {
+      setHistory((h) => [...h, text]);
+      setText("");
+    }
+    setDiscarded(draft.id);
+    setDraftId(null);
+    ai.discardSuggestion({ id: draft.id })
+      .catch(() => setDiscarded(null))
+      .finally(() => {
+        queryClient.invalidateQueries({ queryKey: ["support", "ticket", ticketId] });
+        queryClient.invalidateQueries({ queryKey: ["support", "tickets"] });
+      });
+  };
+
+  const runAi = async (action: RefineAction | "suggest") => {
+    if (!ai || busy) return;
+    setBusy(typeof action === "string" ? action : "custom");
+    setError(null);
+    try {
+      if (action === "suggest") {
+        await ai.draft({ ticketId });
+        await queryClient.invalidateQueries({ queryKey: ["support", "ticket", ticketId] });
+        return;
+      }
+      const before = text;
+      const result =
+        action === "writeUp"
+          ? await ai.writeUp({ ticketId, notes: before })
+          : await ai.refine({ ticketId, text: before, instruction: action, ...(action === "translate" && translateTo ? { language: translateTo } : {}) });
+      setHistory((h) => [...h, before]);
+      setText(result.text);
+    } catch (e) {
+      setError(e instanceof Error && e.message ? e.message : t("ai.failed"));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const translateTo = foreignLanguage(detail, locale);
+  const undo = () => {
+    setText(history.at(-1) ?? "");
+    setHistory((h) => h.slice(0, -1));
+  };
+
   const send = useMutation({
     mutationFn: (status: "waiting" | "solved" | null) => {
       const attachmentIds = files.map((f) => f.id);
       return mode === "note"
         ? client.addNote({ ticketId, text, attachmentIds })
-        : client.reply({ ticketId, text, attachmentIds, status: status ?? "waiting", ...(ccEdit ? { cc: ccEdit } : {}) });
+        : client.reply({
+            ticketId,
+            text,
+            attachmentIds,
+            status: status ?? "waiting",
+            ...(ccEdit ? { cc: ccEdit } : {}),
+            ...(applied && draft ? { suggestionId: draft.id } : {}),
+          });
     },
     onSuccess: () => {
       setText("");
       setFiles([]);
       setError(null);
       setCcEdit(null);
+      setDraftId(null);
+      setHistory([]);
     },
     onError: (e) => setError(e instanceof Error && e.message ? e.message : t("errors.send")),
     onSettled: () => {
@@ -84,7 +171,7 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
   };
 
   const tooLong = maxLength !== null && text.length > maxLength;
-  const canSend = text.trim().length > 0 && !tooLong && uploading === 0 && !send.isPending && (mode === "note" || !blocked);
+  const canSend = text.trim().length > 0 && !tooLong && uploading === 0 && !send.isPending && busy === null && (mode === "note" || !blocked);
 
   return (
     <div className={cn("rounded-xl border bg-card", mode === "note" && "border-amber-300/60 dark:border-amber-500/30")}>
@@ -169,9 +256,16 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
               )}
             </div>
           )}
+          {mode === "reply" && draft && <DraftBar suggestion={draft} applied={applied} onUse={applyDraft} onDiscard={discardDraft} />}
+          {mode === "reply" && suggestion?.kind === "cannot_answer" && !text.trim() && (
+            <p dir="auto" className="px-4 pt-3 text-xs text-muted-foreground">
+              {t("ai.noDraft", { reason: suggestion.reason ?? "" })}
+            </p>
+          )}
           <Textarea
             value={text}
             dir="auto"
+            readOnly={busy !== null && busy !== "suggest"}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSend) {
@@ -202,6 +296,16 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
             </ul>
           )}
           {error && <p className="px-4 pb-2 text-sm text-destructive">{error}</p>}
+          {ai && mode === "reply" && (text.trim() || history.length > 0) && (
+            <RefineRow
+              busy={busy}
+              onRun={runAi}
+              onUndo={history.length ? undo : null}
+              // A suggestion is already in the customer's language until the agent rewrites it.
+              translateTo={draft && text === draft.text ? null : translateTo}
+              showWriteUp={!applied && history.length === 0}
+            />
+          )}
           <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2">
             <div className="flex items-center gap-3">
               {attachmentsAllowed && (
@@ -212,6 +316,12 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
                     {t("composer.attach")}
                   </Button>
                 </>
+              )}
+              {mode === "reply" && canSuggest && !text.trim() && (
+                <Button type="button" variant="ghost" size="sm" onClick={() => runAi("suggest")} disabled={busy !== null}>
+                  {busy === "suggest" ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                  {t("ai.suggest")}
+                </Button>
               )}
               {maxLength !== null && (
                 <span className={cn("text-xs tabular-nums", tooLong ? "text-destructive" : "text-muted-foreground")}>

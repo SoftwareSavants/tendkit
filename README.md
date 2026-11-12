@@ -8,6 +8,7 @@ Customer support you own. Tendkit is a shared inbox, tickets and a customer port
 - **Every channel through one interface.** Email via Resend, Microsoft 365, Gmail or any SMTP/IMAP mailbox; SMS and WhatsApp via Twilio; WhatsApp Cloud API; Telegram; and a signed API for your own forms. Adapters use plain `fetch` and WebCrypto, so they run on Cloudflare Workers, Node, Bun and Deno.
 - **Correct email.** Replies thread in the customer's mail client. Quoted history is trimmed, including Arabic and French. Out-of-office replies and bounces don't reopen tickets. Copies of the same email collapse into one, and a reply address token keeps threading working when headers are lost.
 - **Built for real teams.** It covers assignment, internal notes, "waiting" timers against a response target, spam that blocks the sender, unknown senders you link once, read state per agent, and a portal where customers see their requests.
+- **AI when you want it.** Optional, with any [AI SDK](https://ai-sdk.dev) model: every message gets a topic, an urgency and a one-line summary, and the ticket opens with a reply written from your docs for an agent to review. Nothing is sent on its own.
 - **Multilingual.** English, French and Arabic, right-to-left included.
 
 ## What you get
@@ -17,6 +18,7 @@ Customer support you own. Tendkit is a shared inbox, tickets and a customer port
 | `support` | The core: ticket model, threading, auto-reply detection, the service your API calls (`lib/support`) |
 | `support-postgres` | Drizzle schema, a starting migration and the store for Postgres |
 | `support-d1` | The same for SQLite and Cloudflare D1 (no transactions needed) |
+| `support-ai`, `support-ai-postgres`, `support-ai-d1` | Optional AI: the engine (depends only on `ai`), its tables and store |
 | `support-ui` | Inbox, ticket, composer and customer-portal screens (`components/support`) |
 | `channel-resend`, `channel-microsoft365`, `channel-gmail`, `channel-smtp`, `channel-twilio`, `channel-whatsapp`, `channel-telegram`, `channel-api` | One adapter each |
 

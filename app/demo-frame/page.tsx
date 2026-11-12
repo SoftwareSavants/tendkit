@@ -9,6 +9,7 @@ import { SupportPortalProvider, SupportProvider } from "@/registry/support-ui/pr
 import { SupportInbox } from "@/registry/support-ui/support-inbox";
 import { SupportRequest, SupportRequests } from "@/registry/support-ui/support-requests";
 import { SupportTicket } from "@/registry/support-ui/support-ticket";
+import { SupportAiSettings } from "@/registry/support-ui/support-ai-settings";
 import { VIEWER, createDemoClients } from "@/site/demo-client";
 import { AccountPanel } from "@/site/demo/account-panel";
 import { AgentShell, CustomerShell } from "@/site/demo/app-shell";
@@ -68,6 +69,7 @@ function App() {
   if (screen === "portal") return <Portal clients={clients} />;
 
   const ticketId = params.get("ticket");
+  const aiSettings = params.get("screen") === "ai";
   return (
     <SupportProvider
       client={clients.agent}
@@ -77,8 +79,17 @@ function App() {
       responseTargetMinutes={settings.responseTargetMinutes}
       customerPanel={settings.accountPanel ? (detail) => (detail.customer ? <AccountPanel detail={detail} /> : null) : undefined}
     >
-      <AgentShell title={ticketId ? "Ticket" : "Inbox"}>
-        {ticketId ? <SupportTicket key={ticketId} ticketId={ticketId} /> : <SupportInbox />}
+      <AgentShell title={aiSettings ? "AI" : ticketId ? "Ticket" : "Inbox"}>
+        {aiSettings ? (
+          <div className="space-y-5">
+            <h1 className="text-2xl font-semibold tracking-tight">AI</h1>
+            <SupportAiSettings />
+          </div>
+        ) : ticketId ? (
+          <SupportTicket key={ticketId} ticketId={ticketId} />
+        ) : (
+          <SupportInbox />
+        )}
       </AgentShell>
     </SupportProvider>
   );

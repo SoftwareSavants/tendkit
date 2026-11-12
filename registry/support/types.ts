@@ -106,7 +106,9 @@ export type TicketEventType =
   | "reopened"
   | "follow_up"
   | "contact_changed"
-  | "forwarded";
+  | "forwarded"
+  /** An agent corrected the topic or urgency Copilot gave the ticket. */
+  | "insight_changed";
 
 export type TicketEvent = {
   id: string;
@@ -120,3 +122,45 @@ export type TicketEvent = {
 export type Agent = { id: string; name: string; email?: string | null };
 
 export type CustomerSummary = { id: string; name: string };
+
+/** One line about a customer's account, from `directory.describeCustomer`. */
+export type AccountFact = { label: string; value: string; url?: string | null };
+
+export type Urgency = "urgent" | "high" | "normal" | "low";
+export type Mood = "calm" | "confused" | "frustrated" | "angry";
+
+/** What Copilot understood of a ticket from the customer's latest message. */
+export type TicketInsight = {
+  ticketId: string;
+  basedOnMessageId: string | null;
+  /** One of the topics in the AI settings, or "other". */
+  topic: string | null;
+  urgency: Urgency | null;
+  urgencyReason: string | null;
+  mood: Mood | null;
+  /** BCP-47, such as "en" or "pt-BR": the language the customer writes in. */
+  language: string | null;
+  /** One line, in the agents' language. */
+  summary: string | null;
+  /** Set when an agent changed the topic or urgency; Copilot doesn't overwrite them. */
+  topicSetBy: string | null;
+  urgencySetBy: string | null;
+  updatedAt: Date;
+};
+
+export type SuggestionSource = { type: "knowledge" | "fact" | "guidance"; id: string; title: string; url?: string | null };
+
+export type SuggestionStatus = "pending" | "used" | "edited" | "discarded" | "stale";
+
+/** A reply Copilot drafted, or why it couldn't. */
+export type Suggestion = {
+  id: string;
+  ticketId: string;
+  basedOnMessageId: string;
+  kind: "draft" | "cannot_answer";
+  text: string | null;
+  reason: string | null;
+  sources: SuggestionSource[];
+  status: SuggestionStatus;
+  createdAt: Date;
+};

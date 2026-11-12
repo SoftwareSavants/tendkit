@@ -105,6 +105,7 @@ export default function Screens() {
         { id: "implement-the-client", title: "Implement the client" },
         { id: "mount-the-screens", title: "Mount the screens" },
         { id: "provider-props", title: "Provider props" },
+        { id: "ai", title: "AI" },
         { id: "translations", title: "Translations" },
       ]}
     >
@@ -132,7 +133,7 @@ export default function Screens() {
           { name: "viewerId", type: "string", required: true, description: "The signed-in agent's id, as listAgents returns it." },
           { name: "inboxHref", type: "string", required: true, description: "Where the ticket screen's back link goes." },
           { name: "ticketHref", type: "(id) => string", required: true, description: "The URL of a ticket." },
-          { name: "customerPanel", type: "(detail) => ReactNode", description: "Your own view of the customer, shown next to every ticket: plan, orders, payments." },
+          { name: "customerPanel", type: "(detail) => ReactNode", description: "Your own component next to every ticket. For a plain list of account details, return them from your directory's describeCustomer instead." },
           { name: "responseTargetMinutes", type: "number", default: "240", description: "How long a customer may wait before the wait turns red. It turns amber at three quarters." },
           { name: "t", type: "(key, values) => string", default: "English", description: "Translations. See below." },
           { name: "locale", type: "string", default: '"en"', description: "For dates and numbers." },
@@ -141,6 +142,13 @@ export default function Screens() {
       <Callout title="Try the props">
         The <Link href="/demo">demo</Link> lets you change the theme, the response target and the account panel live.
       </Callout>
+
+      <H2 id="ai">AI</H2>
+      <p>
+        Add an <code>ai</code> object to the client and the screens gain an inbox sorted by urgency with one-line
+        summaries, suggested replies with their sources, rewrite controls in the reply box, translation, and the{" "}
+        <code>SupportAiSettings</code> screen. Without it, none of that renders. See <Link href="/docs/ai#screens">AI</Link>.
+      </p>
 
       <H2 id="translations">Translations</H2>
       <p>

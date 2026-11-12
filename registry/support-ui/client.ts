@@ -12,6 +12,32 @@ export type Agent = { id: string; name: string };
 export type Customer = { id: string; name: string };
 export type FileInfo = { id: string; filename: string; contentType: string; size: number };
 export type Address = { address: string; name?: string | null };
+/** One line about a customer's account, from your directory's `describeCustomer`. */
+export type AccountFact = { label: string; value: string; url?: string | null };
+export type Urgency = "urgent" | "high" | "normal" | "low";
+export type Mood = "calm" | "confused" | "frustrated" | "angry";
+
+/** What AI understood of the customer's latest message. */
+export type TicketInsight = {
+  topic: string | null;
+  urgency: Urgency | null;
+  urgencyReason: string | null;
+  mood: Mood | null;
+  /** BCP-47: the language the customer writes in. */
+  language: string | null;
+  summary: string | null;
+};
+
+export type SuggestionSource = { type: "knowledge" | "fact" | "guidance"; id: string; title: string; url?: string | null };
+
+/** A suggested reply, or why there isn't one. */
+export type Suggestion = {
+  id: string;
+  kind: "draft" | "cannot_answer";
+  text: string | null;
+  reason: string | null;
+  sources: SuggestionSource[];
+};
 
 export type TicketListItem = {
   id: string;
@@ -27,6 +53,10 @@ export type TicketListItem = {
   customer: Customer | null;
   assignee: Agent | null;
   unread: boolean;
+  /** With AI: how urgent it is, a one-line summary, and whether a suggested reply is waiting. */
+  urgency?: Urgency | null;
+  summary?: string | null;
+  draftReady?: boolean;
 };
 
 export type TicketCounts = Record<TicketStatus, number> & { unassigned: number; mine: number };
@@ -51,7 +81,7 @@ export type TimelineMessage = {
 
 export type TimelineEvent = {
   id: string;
-  type: "created" | "assigned" | "status_changed" | "customer_linked" | "reopened" | "follow_up" | "contact_changed" | "forwarded";
+  type: "created" | "assigned" | "status_changed" | "customer_linked" | "reopened" | "follow_up" | "contact_changed" | "forwarded" | "insight_changed";
   actorId: string | null;
   data: Record<string, unknown>;
   createdAt: DateLike;
@@ -82,6 +112,11 @@ export type TicketDetail = {
   /** Who a reply goes to by default; agents can change who's copied. */
   recipients: { to: Address | null; cc: Address[] };
   previousTickets: { id: string; number: number; subject: string | null; status: TicketStatus; lastMessageAt: DateLike }[];
+  /** Shown in the sidebar, with or without AI. */
+  accountFacts?: AccountFact[];
+  insight?: TicketInsight | null;
+  /** The suggested reply nobody has used or discarded yet. */
+  suggestion?: Suggestion | null;
 };
 
 export type ListQuery = {
@@ -89,16 +124,53 @@ export type ListQuery = {
   /** "me", an agent id, null for unassigned, undefined for anyone. */
   assignee?: string | null;
   search?: string;
+  /** Sent for open tickets when `ai` is set: most urgent first, then longest waiting. */
+  sort?: "priority";
   page: number;
   pageSize: number;
 };
+
+export type RefineInstruction = "shorter" | "friendlier" | "formal" | "translate" | { custom: string };
+
+export type AiSettings = {
+  guidance: string;
+  topics: string[];
+  draftOnArrival: boolean;
+  /** Your knowledge sources, from `ai.listKnowledgeSources()`. */
+  sources: { id: string; articles: number; syncedAt: DateLike | null }[];
+};
+
+/**
+ * The AI methods, each calling `support.ai` on your server. Leave `ai` off the client and the
+ * screens show no AI at all.
+ */
+export interface SupportAiClient {
+  refine(input: { ticketId: string; text: string; instruction: RefineInstruction; language?: string }): Promise<{ text: string }>;
+  writeUp(input: { ticketId: string; notes: string }): Promise<{ text: string }>;
+  translate(input: { messageId: string; to: string }): Promise<{ text: string }>;
+  /** Asks for a suggested reply now. */
+  draft(input: { ticketId: string }): Promise<unknown>;
+  discardSuggestion(input: { id: string }): Promise<unknown>;
+  setInsight(input: { ticketId: string; topic?: string; urgency?: Urgency }): Promise<unknown>;
+  getSettings(): Promise<AiSettings>;
+  updateSettings(input: Partial<Pick<AiSettings, "guidance" | "topics" | "draftOnArrival">>): Promise<unknown>;
+  syncKnowledge(): Promise<unknown>;
+}
 
 export interface SupportClient {
   listTickets(query: ListQuery): Promise<{ items: TicketListItem[]; total: number }>;
   counts(): Promise<TicketCounts>;
   getTicket(id: string): Promise<TicketDetail>;
   /** `cc` is only passed when the agent changed who's copied. */
-  reply(input: { ticketId: string; text: string; attachmentIds: string[]; status: "waiting" | "solved" | "open"; cc?: Address[] }): Promise<unknown>;
+  reply(input: {
+    ticketId: string;
+    text: string;
+    attachmentIds: string[];
+    status: "waiting" | "solved" | "open";
+    cc?: Address[];
+    /** The suggested reply the text started from, so its outcome is recorded. */
+    suggestionId?: string;
+  }): Promise<unknown>;
   addNote(input: { ticketId: string; text: string; attachmentIds: string[] }): Promise<unknown>;
   assign(input: { ticketId: string; assigneeId: string | null }): Promise<unknown>;
   setStatus(input: { ticketId: string; status: TicketStatus }): Promise<unknown>;
@@ -109,6 +181,7 @@ export interface SupportClient {
   attachmentUrl(input: { id: string }): Promise<string>;
   listAgents(): Promise<Agent[]>;
   searchCustomers(query: string): Promise<Customer[]>;
+  ai?: SupportAiClient;
 }
 
 export type PortalTicket = {

@@ -22,6 +22,12 @@ export const DOCS: DocGroup[] = [
     ],
   },
   {
+    title: "AI",
+    pages: [
+      { title: "AI", href: "/docs/ai", description: "Optional: triage, summaries and suggested replies from your docs, with any AI SDK model." },
+    ],
+  },
+  {
     title: "Email",
     pages: [
       { title: "Email setup", href: "/docs/email", description: "Receiving domains, threading, trimming, automatic mail and sender authentication." },

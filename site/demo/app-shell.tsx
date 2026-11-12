@@ -19,6 +19,7 @@ import {
   Plus,
   Settings,
   ShieldAlert,
+  Sparkles,
   User,
   UserX,
   Users,
@@ -125,7 +126,8 @@ export function AgentShell({ children, title }: { children: React.ReactNode; tit
   const counts = useQuery({ queryKey: ["support", "counts"], queryFn: () => client.counts() });
   const status = params.get("status") ?? "open";
   const assignee = params.get("assignee");
-  const onTicket = params.has("ticket");
+  const onAi = params.get("screen") === "ai";
+  const onTicket = params.has("ticket") || onAi;
   const view = (s: string, a?: string) => !onTicket && status === s && (a ? assignee === a : !assignee);
   const c = counts.data;
 
@@ -151,6 +153,7 @@ export function AgentShell({ children, title }: { children: React.ReactNode; tit
               { label: "Waiting on customer", href: "/demo-frame?status=waiting", icon: Clock, count: c?.waiting, active: view("waiting") },
               { label: "Solved", href: "/demo-frame?status=solved", icon: CircleCheck, active: view("solved") },
               { label: "Spam", href: "/demo-frame?status=spam", icon: ShieldAlert, active: view("spam") },
+              { label: "AI", href: "/demo-frame?screen=ai", icon: Sparkles, active: onAi },
             ],
           },
           {

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { ChevronLeft, ChevronRight, Search, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,11 +14,12 @@ import { useSupport } from "./provider";
 import type { TicketListItem, TicketStatus } from "./client";
 import { contactLabel, formatDuration, formatWhen, waitLevel } from "./format";
 import { AgentAvatar, UnknownSenderBadge } from "./parts";
+import { UrgencyMark } from "./ai";
 
 const TABS: TicketStatus[] = ["open", "waiting", "solved"];
 const PAGE_SIZE = 25;
 
-/** The shared inbox: what needs an answer, longest wait first. */
+/** The shared inbox: what needs an answer, longest wait first. With AI, the most urgent come before that. */
 export function SupportInbox() {
   const { client, t, viewerId } = useSupport();
   const router = useRouter();
@@ -58,13 +59,15 @@ export function SupportInbox() {
         : assignee === "none"
           ? t("inbox.unassigned")
           : (agents.data?.find((a) => a.id === assignee)?.name ?? t("inbox.anyone"));
+  const sort = client.ai && status === "open" ? ("priority" as const) : undefined;
   const list = useQuery({
-    queryKey: ["support", "tickets", { status, assignee, page, search }],
+    queryKey: ["support", "tickets", { status, assignee, page, search, sort }],
     queryFn: () =>
       client.listTickets({
         status,
         assignee: assignee === "any" ? undefined : assignee === "none" ? null : assignee,
         search: search || undefined,
+        ...(sort ? { sort } : {}),
         page,
         pageSize: PAGE_SIZE,
       }),
@@ -195,6 +198,8 @@ function TicketRow({ ticket, status, agents }: { ticket: TicketListItem; status:
         : agents.find((a) => a.id === ticket.previewAuthorId)?.name.split(" ")[0]
       : null;
   const level = ticket.waitingSince ? waitLevel(ticket.waitingSince, responseTargetMinutes) : "normal";
+  // Once your team has answered, their reply says more than a summary of the question.
+  const summary = ticket.previewKind !== "outbound" ? ticket.summary : null;
 
   return (
     <li>
@@ -218,15 +223,32 @@ function TicketRow({ ticket, status, agents }: { ticket: TicketListItem; status:
           </div>
         </div>
         <div className="col-span-2 col-start-2 min-w-0 md:col-span-1 md:col-start-3 md:row-start-1">
-          <p dir="auto" className={cn("truncate text-sm", ticket.unread ? "font-semibold" : "font-medium")}>
-            {ticket.subject || t("inbox.noSubject")}
-          </p>
-          {ticket.preview && (
-            <p dir="auto" className="truncate text-sm text-muted-foreground">
-              {previewAuthor && <span className="text-foreground/70">{previewAuthor}: </span>}
-              {ticket.preview}
+          <div className="flex min-w-0 items-center gap-1.5">
+            <p dir="auto" className={cn("truncate text-sm", ticket.unread ? "font-semibold" : "font-medium")}>
+              {ticket.subject || t("inbox.noSubject")}
             </p>
-          )}
+            {ticket.draftReady && (
+              <span className="shrink-0 text-primary" title={t("ai.draftReady")}>
+                <Sparkles className="size-3.5" aria-label={t("ai.draftReady")} />
+              </span>
+            )}
+          </div>
+          {/* What the customer needs, when AI has read their message; else the message itself. */}
+          <div className="flex min-w-0 items-center gap-1.5">
+            {status === "open" && <UrgencyMark urgency={ticket.urgency} />}
+            {summary ? (
+              <p dir="auto" className="truncate text-sm text-muted-foreground">
+                {summary}
+              </p>
+            ) : (
+              ticket.preview && (
+                <p dir="auto" className="truncate text-sm text-muted-foreground">
+                  {previewAuthor && <span className="text-foreground/70">{previewAuthor}: </span>}
+                  {ticket.preview}
+                </p>
+              )
+            )}
+          </div>
         </div>
         <div className="hidden min-w-0 items-center gap-2 text-sm text-muted-foreground md:col-start-4 md:row-start-1 md:flex">
           {ticket.assignee ? (

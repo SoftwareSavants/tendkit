@@ -5,6 +5,9 @@ import { DatabaseSync } from "node:sqlite";
 import { drizzle as drizzleProxy } from "drizzle-orm/sqlite-proxy";
 import { createPostgresStore } from "../registry/support/postgres/store";
 import { createD1Store } from "../registry/support/d1/store";
+import { createPostgresAiStore } from "../registry/support/postgres/ai-store";
+import { createD1AiStore } from "../registry/support/d1/ai-store";
+import type { SupportDirectory } from "../registry/support/service";
 import { createSupport, type AttachmentStorage, type SupportNotification, type SupportOptions } from "../registry/support/service";
 import type { Channel, ChannelCapabilities, InboundMessage, OutboundMessage, SendResult } from "../registry/support/channel";
 
@@ -36,7 +39,17 @@ export function createSqliteDb() {
 }
 
 export async function createTestStore() {
-  return storeKind === "d1" ? createD1Store(createSqliteDb()) : createPostgresStore(await createTestDb());
+  return (await createTestStores()).store;
+}
+
+/** The support store and Copilot's store on one database. */
+export async function createTestStores() {
+  if (storeKind === "d1") {
+    const db = createSqliteDb();
+    return { store: createD1Store(db), aiStore: createD1AiStore(db) };
+  }
+  const db = await createTestDb();
+  return { store: createPostgresStore(db), aiStore: createPostgresAiStore(db) };
 }
 
 let template: Promise<PGlite> | undefined;
@@ -114,6 +127,24 @@ export const people: Record<string, { customerId: string; userId: string; name: 
   "lucas@lumen.test": { customerId: "cus_lumen", userId: "usr_lucas", name: "Lucas", locale: "fr" },
 };
 
+export const testDirectory: SupportDirectory = {
+  async identify(identity) {
+    return people[identity.value] ?? null;
+  },
+  async searchCustomers(query) {
+    return customers.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()));
+  },
+  async getCustomers(ids) {
+    return customers.filter((c) => ids.includes(c.id));
+  },
+  async listAgents() {
+    return [
+      { id: "agent_a", name: "Daniel Kim", email: "daniel@acme.test" },
+      { id: "agent_k", name: "Priya", email: "priya@acme.test" },
+    ];
+  },
+};
+
 export async function setup(options: Partial<SupportOptions> = {}, channels?: Channel[]) {
   const store = await createTestStore();
   const storage = memoryStorage();
@@ -124,23 +155,7 @@ export async function setup(options: Partial<SupportOptions> = {}, channels?: Ch
     store,
     storage,
     channels: channels ?? [email.channel],
-    directory: {
-      async identify(identity) {
-        return people[identity.value] ?? null;
-      },
-      async searchCustomers(query) {
-        return customers.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()));
-      },
-      async getCustomers(ids) {
-        return customers.filter((c) => ids.includes(c.id));
-      },
-      async listAgents() {
-        return [
-          { id: "agent_a", name: "Daniel Kim", email: "daniel@acme.test" },
-          { id: "agent_k", name: "Priya", email: "priya@acme.test" },
-        ];
-      },
-    },
+    directory: testDirectory,
     notify: async (n) => void notifications.push(n),
     acknowledgement: () => ({ text: "We've received your message and will reply to this email." }),
     fromName: "Acme Support",

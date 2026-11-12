@@ -66,8 +66,11 @@
       "reopened": "Reopened by the customer's reply",
       "followUp": "Follow-up to ticket #{number}",
       "contactChanged": "{actor} changed the contact to {address}",
-      "forwarded": "Forwarded by {actor}"
-    }
+      "forwarded": "Forwarded by {actor}",
+      "urgencyChanged": "{actor} set the urgency to {urgency}",
+      "topicChanged": "{actor} set the topic to {topic}"
+    },
+    "account": "Account"
   },
   "composer": {
     "reply": "Reply",
@@ -89,6 +92,63 @@
       "reply_window_closed": "You can only reply within 24 hours of the customer's last message on this channel. Leave a note, or wait for them to write again.",
       "no_channel": "This ticket's channel is no longer set up, so replies can't be sent.",
       "no_recipient": "There's no address to reply to on this channel."
+    }
+  },
+  "ai": {
+    "urgencyLabel": "Urgency:",
+    "urgency": {
+      "urgent": "Urgent",
+      "high": "High",
+      "normal": "Normal",
+      "low": "Low"
+    },
+    "topicLabel": "Topic:",
+    "otherTopic": "Other",
+    "mood": {
+      "confused": "Sounds confused",
+      "frustrated": "Sounds frustrated",
+      "angry": "Sounds angry"
+    },
+    "draftReady": "Suggested reply ready",
+    "draft": "Suggested reply. Review it before you send.",
+    "draftWaiting": "A suggested reply is ready.",
+    "useDraft": "Use it",
+    "discard": "Discard",
+    "sources": "Based on",
+    "guidance": "Team guidance",
+    "noDraft": "No suggested reply: {reason}",
+    "suggest": "Suggest a reply",
+    "writeUp": "Write it up",
+    "shorter": "Shorter",
+    "friendlier": "Friendlier",
+    "formal": "More formal",
+    "translateTo": "Translate to {language}",
+    "instruction": "Ask for a change…",
+    "apply": "Apply",
+    "undo": "Undo",
+    "translate": "Translate",
+    "translatedFrom": "Translated from {language}",
+    "showUntranslated": "Show original",
+    "failed": "That didn't work. Try again.",
+    "settings": {
+      "guidance": "Guidance",
+      "guidanceHelp": "How your team answers: tone, policies, what never to promise. Every suggested reply follows it.",
+      "guidancePlaceholder": "Friendly and brief. Refunds within 30 days, never later. Don't promise delivery dates.",
+      "topics": "Topics",
+      "topicsHelp": "Each new message is filed under one of these.",
+      "addTopic": "Add a topic",
+      "removeTopic": "Remove {name}",
+      "draftOnArrival": "Suggest a reply when a message arrives",
+      "draftOnArrivalHelp": "When off, agents ask for a suggestion on the ticket.",
+      "knowledge": "Knowledge",
+      "knowledgeHelp": "Suggested replies answer from these sources only. They sync once a day.",
+      "noSources": "No knowledge sources are set up yet.",
+      "articles": "{count} articles",
+      "synced": "Synced {when}",
+      "neverSynced": "Not synced yet",
+      "sync": "Sync now",
+      "save": "Save changes",
+      "saved": "Saved"
     }
   },
   "contact": {
