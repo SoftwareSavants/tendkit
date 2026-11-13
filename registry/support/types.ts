@@ -110,7 +110,11 @@ export type TicketEventType =
   /** An agent corrected the topic or urgency Copilot gave the ticket. */
   | "insight_changed"
   /** An agent ran an action, or approved one Copilot proposed. For agents only: customers never see events. */
-  | "action_run";
+  | "action_run"
+  /** Autopilot sent a reply with nobody reading it first. For agents only. */
+  | "autopilot_sent"
+  /** An agent marked a reply Autopilot sent as wrong. */
+  | "autopilot_flagged";
 
 export type TicketEvent = {
   id: string;
@@ -173,8 +177,47 @@ export type Suggestion = {
   /** Changes the draft assumes: each waits for an agent to approve or skip it. */
   actions: ProposedAction[];
   status: SuggestionStatus;
+  /** The ticket's topic and the customer's language when it was drafted: what its outcome counts towards. */
+  topic: string | null;
+  language: string | null;
+  /** Set when the topic is on Autopilot: where this reply stands. Null for an ordinary suggestion. */
+  autopilot: AutopilotState | null;
+  /** When a held reply is sent unless someone steps in. */
+  sendAt: Date | null;
+  /** Why Autopilot left this reply to a person, when the topic is on. */
+  autopilotBlock: AutopilotBlock | null;
   createdAt: Date;
 };
+
+/** "hold": queued, then sent after a delay unless someone steps in. "immediate": sent as soon as it's drafted. */
+export type AutopilotMode = "hold" | "immediate";
+
+/**
+ * held: waiting out the delay. sending: being sent. sent: went out. cancelled: someone stepped in,
+ * or it no longer applied when its time came. failed: the channel didn't take it.
+ */
+export type AutopilotState = "held" | "sending" | "sent" | "cancelled" | "failed";
+
+/** Why a reply on an Autopilot topic went to a person instead. */
+export type AutopilotBlock =
+  | "stopped"
+  | "unknown_customer"
+  | "channel"
+  | "asked_for_human"
+  | "not_helped"
+  | "mood"
+  | "urgency"
+  | "long_thread"
+  | "needs_approval"
+  | "not_confident"
+  | "unsourced"
+  | "language"
+  | "hourly_cap"
+  /** An agent stopped a held reply. */
+  | "held_back"
+  /** By the time a held reply was due, the ticket had moved on: a note, a status change, a paused topic. */
+  | "moved_on"
+  | "send_failed";
 
 /** "always": an agent approves every run. "never": a read-only lookup Copilot may run while drafting. */
 export type ActionApproval = "always" | "never";

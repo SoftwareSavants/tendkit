@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Code } from "@/site/code";
-import { Callout, DocsShell, H2, Props, Step, Steps } from "@/site/docs/shell";
+import { Callout, DocsShell, H2, H3, Props, Step, Steps } from "@/site/docs/shell";
 
 export const metadata: Metadata = {
   title: "AI",
@@ -266,6 +266,51 @@ const ACTIONS_CLIENT = `ai: {
   setActionEnabled: (input) => call("ai.setActionEnabled", input),
 },`;
 
+const AUTOPILOT = `supportAi({
+  model,
+  store,
+  knowledge: [docs],
+  // Every value is optional. These are the defaults.
+  autopilot: {
+    minDrafts: 30,          // decided drafts a topic needs before it can be switched on
+    minRate: 0.9,           // share of them sent as drafted or lightly edited
+    windowDays: 30,         // how far back a track record looks
+    holdMinutes: 10,        // "hold for review" waits this long before sending
+    maxPerHour: 30,         // across all topics
+    blockMoods: ["angry"],
+    blockUrgencies: ["urgent"],
+    maxCustomerMessages: 3, // the customer's third message without a resolution goes to a person
+    minLanguageDrafts: 5,   // drafts a language needs within the topic before it's answered alone
+    // channels: ["email"],                         // channel ids; defaults to every email channel
+    // signature: ({ language }) => "Acme Support", // what an Autopilot reply signs with
+    // canManage: (agentId) => isSupportLead(agentId),
+  },
+});`;
+
+const AUTOPILOT_API = `case "ai.getAutopilot":
+  return Response.json(await s.ai.getAutopilot());
+case "ai.setAutopilotTopic":
+  // Who switched a topic on is recorded. Never take actorId from the request body.
+  return Response.json(await s.ai.setAutopilotTopic({ ...input, actorId: agent.id }));
+case "ai.setAutopilot":
+  return Response.json(await s.ai.setAutopilot({ ...input, actorId: agent.id }));
+case "ai.autopilotExamples":
+  return Response.json(await s.ai.autopilotExamples(input));
+case "ai.holdAutopilotReply":
+  return Response.json(await s.ai.holdAutopilotReply({ ...input, actorId: agent.id }));
+case "ai.flagAutopilotReply":
+  return Response.json(await s.ai.flagAutopilotReply({ ...input, actorId: agent.id }));`;
+
+const AUTOPILOT_CLIENT = `ai: {
+  // …the methods above. Each of these is optional: the screens show what you provide.
+  getAutopilot: () => call("ai.getAutopilot"),
+  setAutopilotTopic: (input) => call("ai.setAutopilotTopic", input),
+  setAutopilot: (input) => call("ai.setAutopilot", input),
+  autopilotExamples: (input) => call("ai.autopilotExamples", input),
+  holdAutopilotReply: (input) => call("ai.holdAutopilotReply", input),
+  flagAutopilotReply: (input) => call("ai.flagAutopilotReply", input),
+},`;
+
 const EMBEDDER = `import { embedMany } from "ai";
 import { openai } from "@ai-sdk/openai";
 
@@ -293,6 +338,7 @@ export default function Ai() {
         { id: "voice", title: "Voice" },
         { id: "memory", title: "Memory" },
         { id: "actions", title: "Actions" },
+        { id: "autopilot", title: "Autopilot" },
         { id: "methods", title: "Methods" },
         { id: "privacy", title: "Privacy" },
       ]}
@@ -300,7 +346,8 @@ export default function Ai() {
       <p>
         AI is optional. Without it, nothing in Tendkit changes. With it, every customer message is read as it arrives: the
         inbox shows what the customer needs and how urgent it is, and the ticket opens with a reply already written from
-        your docs. An agent reviews, changes and sends it. Nothing is ever sent on its own.
+        your docs. An agent reviews, changes and sends it. Nothing is sent on its own, except on the topics your team
+        switches to <a href="#autopilot">Autopilot</a> once their track record has earned it.
       </p>
 
       <H2 id="set-it-up">Set it up</H2>
@@ -318,7 +365,7 @@ export default function Ai() {
           <Code title="db/schema.ts" lang="ts" code={`export * from "@/lib/support/postgres/ai-schema";`} className="mt-1" />
           <p className="mt-3 text-muted-foreground">
             Then generate and apply a migration with Drizzle as usual. <code>lib/support/postgres/0001_ai.sql</code>,{" "}
-            <code>0002_memory.sql</code> and <code>0003_actions.sql</code> are the reference.
+            <code>0002_memory.sql</code>, <code>0003_actions.sql</code> and <code>0004_autopilot.sql</code> are the reference.
           </p>
         </Step>
         <Step title="Give it a model and your docs">
@@ -374,6 +421,7 @@ export default function Ai() {
           { name: "fastModel", type: "LanguageModel", default: "model", description: "Triage, rewrites and translations. A small, fast model is enough." },
           { name: "knowledge", type: "KnowledgeSource[]", default: "[]", description: "What suggestions may answer from. See Knowledge." },
           { name: "actions", type: "SupportAction[]", default: "[]", description: "What AI may do in your product for the customer on the ticket. See Actions." },
+          { name: "autopilot", type: "false | AutopilotOptions", description: "Thresholds, checks and limits for the topics your team lets answer on their own. Nothing is on until someone switches a topic on. false removes it. See Autopilot." },
           { name: "defer", type: "(work: Promise) => void", description: "Runs the model calls after the webhook has answered. Without it they run in the next runScheduled." },
           { name: "agentLanguage", type: "string", default: '"en"', description: "The language your agents read (BCP-47), for summaries, reasons and translations." },
           { name: "knowledgeBudget", type: "number", default: "120000", description: "Characters of knowledge a prompt may carry. Past it, only the articles closest to the conversation are sent." },
@@ -643,6 +691,133 @@ export default function Ai() {
       <Code title="app/api/support/route.ts" lang="ts" code={ACTIONS_API} />
       <Code title="app/admin/support/client.ts" lang="ts" code={ACTIONS_CLIENT} />
 
+      <H2 id="autopilot">Autopilot</H2>
+      <p>
+        Some questions get the same correct answer every time. Autopilot lets those be answered in minutes with no
+        person involved, topic by topic, so your team spends its time on what needs judgment. It is never switched on
+        for you: a topic earns it with evidence, a person on your team grants it, and every reply still has to pass
+        each check below. It needs the <code>0004_autopilot</code> migration, which also files the outcomes you have
+        already recorded under their topics, so a team that has used suggested replies for a while starts with a track
+        record.
+      </p>
+      <H3>The track record</H3>
+      <p>
+        Every suggested reply is stored with how it ended. For each topic, over the last 30 days, Tendkit counts the
+        drafts agents decided on:
+      </p>
+      <ul>
+        <li><strong>Sent as drafted.</strong> The agent sent it unchanged.</li>
+        <li>
+          <strong>Lightly edited.</strong> Under 15% of the words changed, and every number, link and address stayed.
+          Changing &quot;3 business days&quot; to &quot;5&quot; is one word and a different answer, so any edit that adds,
+          removes or replaces a number, a link or an email address counts as a rewrite.
+        </li>
+        <li><strong>Rewritten</strong> and <strong>discarded.</strong> The draft wasn&apos;t what the agent wanted to say.</li>
+        <li>
+          <strong>Came back unhappy.</strong> It was sent as drafted or lightly edited, and the customer&apos;s next
+          message sounded frustrated or angry, or said the reply didn&apos;t help. It counts against the topic.
+        </li>
+        <li><strong>Flagged.</strong> Autopilot sent it and an agent marked it as wrong.</li>
+      </ul>
+      <p>
+        Next to those it shows how many questions it couldn&apos;t answer (they always go to a person), how many replies
+        Autopilot sent, how many were followed by a reopened ticket, and the split by language. Drafts still waiting, or
+        replaced because the customer wrote again, are no evidence either way and aren&apos;t counted.
+      </p>
+      <H3>Eligible, then switched on by a person</H3>
+      <p>
+        A topic is <strong>ready</strong> when its latest 30 decided drafts are at least 90% sent as drafted or lightly
+        edited, with no flagged reply waiting for review. Both numbers are set in code; in AI settings your team can raise
+        them and never lower them. <code>SupportAiSettings</code> shows every topic with its numbers and a link to the
+        drafts behind them, each with what was sent instead and its ticket.
+      </p>
+      <p>
+        Ready is an invitation. Someone switches the topic on, choosing how it sends, and their name and the date are
+        kept. <code>setAutopilotTopic</code> refuses a topic that isn&apos;t ready, whoever asks.
+      </p>
+      <ul>
+        <li>
+          <strong>Hold for review</strong> (start here). The reply is queued on the ticket, which stays open, and is sent
+          after 10 minutes unless someone steps in: stopping it, answering, leaving a note, or changing the status. A
+          stopped reply stays as an ordinary suggestion. A held reply is taken in one conditional update before
+          anything is done with it, by the scheduler to send it or by an agent who stops it or answers, so the
+          customer never gets two: an agent who replies in the seconds Autopilot is sending is asked to reload
+          instead. Held replies are sent by <code>runScheduled</code>, so the wait
+          is the hold time plus up to one interval of your schedule.
+        </li>
+        <li><strong>Send immediately.</strong> The reply goes out as soon as it is written.</li>
+      </ul>
+      <H3>What a reply must pass</H3>
+      <p>Autopilot sends a reply only when all of these hold. Otherwise it stays a suggested reply, and says why.</p>
+      <ul>
+        <li>The ticket&apos;s topic is on, and Autopilot isn&apos;t stopped.</li>
+        <li>The ticket is linked to a customer. Unknown senders, contact forms and mail that failed authentication never are.</li>
+        <li>The channel is allowed: every email channel by default, or the ids in <code>channels</code>.</li>
+        <li>
+          The draft is confident and fully sourced: the model marked every statement as backed by a source, every
+          source it cited exists, and at least one of them is an article, an approved answer, an account fact or a
+          lookup. Guidance alone is tone, not an answer.
+        </li>
+        <li>It proposes no action. Changes to an account always wait for an agent.</li>
+        <li>The customer doesn&apos;t sound angry and the ticket isn&apos;t urgent (<code>blockMoods</code>, <code>blockUrgencies</code>).</li>
+        <li>The customer hasn&apos;t asked for a person, and hasn&apos;t said the last reply didn&apos;t help.</li>
+        <li>It isn&apos;t the customer&apos;s third message since the ticket was opened or reopened.</li>
+        <li>The topic has at least five decided drafts in the customer&apos;s language, at the same rate.</li>
+        <li>Fewer than 30 replies went out in the last hour.</li>
+      </ul>
+      <p>
+        A reply asked for by an agent (<code>ai.draft</code>) is theirs to send, and &quot;I can&apos;t answer this&quot;
+        is never sent.
+      </p>
+      <H3>What the customer and the team see</H3>
+      <p>
+        The reply goes out from your team, to the people a reply would go to by default. It never signs as a person. By
+        default it ends with your <code>fromName</code> and one line: &quot;This reply was sent automatically. If it
+        doesn&apos;t help, reply to say so and a person will take over.&quot; That line is true by construction: a
+        customer who says so, or comes back sounding unhappy, is never answered by Autopilot again on that message. Set{" "}
+        <code>signature</code> to word it your way or in the customer&apos;s language, or to <code>false</code> if you
+        tell customers some other way. The signature is left off when a channel has no room for it.
+      </p>
+      <p>
+        Agents see the reply on the timeline as &quot;Autopilot&quot;, marked &quot;Sent by Autopilot&quot; with its topic.
+        Customers and the portal never see that mark. The ticket moves to Waiting on customer with its assignee unchanged, and the
+        customer&apos;s next message brings it back to Open like any other.
+      </p>
+      <H3>Brakes</H3>
+      <ul>
+        <li>
+          <strong>Flag as wrong.</strong> One click, by any agent, under a reply Autopilot sent, with a note if they
+          want to say what was wrong. The topic pauses at once,
+          the ticket goes back to Open, and the question is filed with the next daily review as an{" "}
+          <a href="#memory">unanswered question</a>. The topic stays paused until someone with permission resumes it,
+          which records the review.
+        </li>
+        <li>
+          <strong>Automatic pause.</strong> When fewer than 90% of a topic&apos;s latest 30 drafts are right (judged from
+          10 drafts on), it pauses: checked before every send and on every scheduled run. It can be resumed once the
+          record has recovered.
+        </li>
+        <li>
+          <strong>Stop Autopilot.</strong> A kill switch in AI settings that any agent can pull. Nothing more is sent,
+          held replies included; topics keep their switches for when it is started again.
+        </li>
+        <li><strong>An hourly cap</strong> across all topics, <code>maxPerHour</code>.</li>
+        <li>
+          <strong>Failures fall back.</strong> A reply the channel didn&apos;t take stays on the ticket as failed, with the
+          draft as a suggestion. If anything in Autopilot errors, the draft waits for an agent.
+        </li>
+      </ul>
+      <Code title="lib/support/index.ts" lang="ts" code={AUTOPILOT} />
+      <Callout title="Who may switch it on">
+        Stopping, switching a topic off, holding a reply and flagging are open to every agent. Switching a topic on,
+        resuming one, starting Autopilot again and raising the bar go through <code>canManage(agentId)</code> when you
+        set it. Either way, pass the signed-in agent&apos;s id as <code>actorId</code> from your server: it is who the
+        decision is recorded under.
+      </Callout>
+      <p>To turn the screens on, expose the methods and add them to your client:</p>
+      <Code title="app/api/support/route.ts" lang="ts" code={AUTOPILOT_API} />
+      <Code title="app/admin/support/client.ts" lang="ts" code={AUTOPILOT_CLIENT} />
+
       <H2 id="methods">Methods</H2>
       <p>
         <code>support().ai</code> exists only when <code>ai</code> is configured.
@@ -670,6 +845,12 @@ export default function Ai() {
           { name: "declineAction", type: "({ ticketId, suggestionId, action, actorId, text? }) => { text }", description: "Skips a proposal and returns the reply rewritten without it." },
           { name: "listActions / setActionEnabled", type: "", description: "Every declared action as { name, title, description, approval, enabled }; setActionEnabled({ name, enabled }) only accepts lookups." },
           { name: "listActionRuns", type: "({ ticketId, limit? }) => ActionRun[]", description: "A ticket's log, newest first: action, input, trigger (draft, suggestion or manual), status, summary, approvedBy, durationMs." },
+          { name: "getAutopilot", type: "() => AutopilotOverview", description: "Every topic with its stage (collecting, eligible, on, paused), track record, mode and who switched it on, plus the thresholds in force and the kill switch." },
+          { name: "setAutopilotTopic", type: "({ topic, on, mode?, actorId })", description: 'Switches a topic on ("hold" or "immediate"), off, or changes its mode. Switching on or resuming is refused unless the record meets the thresholds.' },
+          { name: "setAutopilot", type: "({ stopped?, minDrafts?, minRate?, actorId })", description: "The kill switch, and thresholds stricter than the ones in code (minRate is 0 to 1; null goes back to the code's)." },
+          { name: "autopilotExamples", type: "({ topic, only?, limit? }) => AutopilotExample[]", description: 'A topic\'s recent drafts with how each ended, the text sent instead and the ticket. only: "changed" leaves out the ones that were right.' },
+          { name: "holdAutopilotReply", type: "({ suggestionId, actorId })", description: "Stops a held reply. It stays on the ticket as a suggestion." },
+          { name: "flagAutopilotReply", type: "({ suggestionId, actorId, note? })", description: "Marks a reply Autopilot sent as wrong: pauses its topic, reopens the ticket and files the question as a gap." },
           { name: "setInsight", type: "({ ticketId, actorId, topic?, urgency? })", description: "An agent's correction. Kept on later messages and recorded on the timeline." },
         ]}
       />
@@ -692,7 +873,9 @@ export default function Ai() {
         Insights, suggestions and their outcomes are stored in your database, in <code>support_ticket_insights</code> and{" "}
         <code>support_suggestions</code>, and are deleted with the ticket. So are the corrections memory keeps (
         <code>support_examples</code>), a ticket&apos;s place in a gap, and the log of the actions run on it (
-        <code>support_action_runs</code>, with their inputs and results). Approved answers and accepted guidance are your
+        <code>support_action_runs</code>, with their inputs and results). Autopilot adds no new copy of a conversation: a
+        track record is counted from <code>support_suggestions</code>, and <code>support_autopilot_topics</code> holds
+        only each topic&apos;s switch and who set it. Approved answers and accepted guidance are your
         team&apos;s own text and stay until you delete them. The daily review sends the month&apos;s rewritten drafts, and
         the questions that went unanswered, to the same provider as everything else. Tell your customers about the provider where
         your privacy policy requires it, and choose one whose data terms fit your product.

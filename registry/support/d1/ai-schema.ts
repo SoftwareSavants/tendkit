@@ -18,6 +18,12 @@ export const supportAiSettings = sqliteTable("support_ai_settings", {
   memoryRunAt: ms("memory_run_at"),
   memoryCursor: ms("memory_cursor"),
   disabledActions: text("disabled_actions", { mode: "json" }).$type<string[]>().notNull().default([]),
+  /** Autopilot's kill switch: set while it is stopped for every topic. */
+  autopilotStoppedAt: ms("autopilot_stopped_at"),
+  autopilotStoppedBy: text("autopilot_stopped_by"),
+  /** The team's own thresholds, when stricter than the ones in code. */
+  autopilotMinDrafts: integer("autopilot_min_drafts"),
+  autopilotMinRate: real("autopilot_min_rate"),
   updatedAt: ms("updated_at").notNull().default(now),
 });
 
@@ -57,6 +63,9 @@ export const supportTicketInsights = sqliteTable(
     pendingMessageId: text("pending_message_id"),
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),
+    /** From the customer's latest message, for Autopilot: they ask for a person, or say the last reply didn't help. */
+    asksForHuman: integer("asks_for_human", { mode: "boolean" }).notNull().default(false),
+    notHelped: integer("not_helped", { mode: "boolean" }).notNull().default(false),
     updatedAt: ms("updated_at").notNull().default(now),
   },
   (t) => [index("support_ticket_insights_pending_idx").on(t.pendingMessageId, t.updatedAt)]
@@ -86,8 +95,30 @@ export const supportSuggestions = sqliteTable(
     finalText: text("final_text"),
     createdAt: ms("created_at").notNull().default(now),
     decidedAt: ms("decided_at"),
+    /* Autopilot (0004_autopilot.sql): what each outcome counts towards, and replies sent with nobody reading them first. */
+    /** The ticket's topic and the customer's language when it was drafted. */
+    topic: text("topic"),
+    language: text("language"),
+    /** How much the agent changed it before sending, 0 to 1 (`editWeight`). */
+    change: real("change"),
+    /** held, sending, sent, cancelled or failed. Null for an ordinary suggestion. */
+    autopilot: text("autopilot"),
+    sendAt: ms("send_at"),
+    /** Why Autopilot left it to a person. */
+    autopilotBlock: text("autopilot_block"),
+    /** After it was sent: unhappy or reopened. */
+    followUp: text("follow_up"),
+    flaggedAt: ms("flagged_at"),
+    flaggedBy: text("flagged_by"),
+    flagNote: text("flag_note"),
+    flagReviewedAt: ms("flag_reviewed_at"),
   },
-  (t) => [index("support_suggestions_ticket_idx").on(t.ticketId, t.status, t.createdAt)]
+  (t) => [
+    index("support_suggestions_ticket_idx").on(t.ticketId, t.status, t.createdAt),
+    index("support_suggestions_topic_idx").on(t.topic, t.createdAt),
+    index("support_suggestions_autopilot_idx").on(t.autopilot, t.sendAt),
+    index("support_suggestions_sent_message_idx").on(t.sentMessageId),
+  ]
 );
 
 /* Memory (0002_memory.sql): what the team teaches Copilot while answering. */
@@ -233,6 +264,23 @@ export const supportActionRuns = sqliteTable(
   ]
 );
 
+/* Autopilot (0004_autopilot.sql): the topics a team lets answer on their own. */
+
+/** One row per topic someone switched on: how it sends, whether it's on, and who decided. */
+export const supportAutopilotTopics = sqliteTable("support_autopilot_topics", {
+  topic: text("topic").primaryKey(),
+  /** hold or immediate. */
+  mode: text("mode").notNull().default("hold"),
+  /** on, paused or off. */
+  status: text("status").notNull().default("off"),
+  enabledBy: text("enabled_by"),
+  enabledAt: ms("enabled_at"),
+  pausedAt: ms("paused_at"),
+  /** quality or flagged. */
+  pauseReason: text("pause_reason"),
+  updatedAt: ms("updated_at").notNull().default(now),
+});
+
 export const supportAiSchema = {
   supportAiSettings,
   supportKnowledge,
@@ -245,4 +293,5 @@ export const supportAiSchema = {
   supportGaps,
   supportGapTickets,
   supportActionRuns,
+  supportAutopilotTopics,
 };

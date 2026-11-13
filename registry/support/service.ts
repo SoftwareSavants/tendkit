@@ -82,6 +82,15 @@ export type SupportAiContext = {
   customerName(customerId: string): Promise<string | null>;
   /** An agent from the directory, or null. Never throws. */
   agent(agentId: string): Promise<Agent | null>;
+  /** `fromName`: the name replies go out under. */
+  teamName: string | null;
+  /**
+   * Sends a reply nobody read first (Autopilot): from the team, with no author, to the people a
+   * reply goes to by default. `signature` is appended when the channel has room for it. The ticket
+   * then waits on the customer. Returns null when no reply can be sent on this ticket right now,
+   * and the message, marked failed, when the channel didn't take it. Never throws.
+   */
+  sendUnattended(input: { ticketId: string; text: string; signature: string | null }): Promise<Message | null>;
   now: () => Date;
   log: NonNullable<SupportOptions["log"]>;
 };
@@ -91,6 +100,12 @@ export interface SupportAiEngine<Api = unknown> {
   api: Api;
   /** A customer wrote (not automated mail, not your team). Must not throw. */
   messageReceived(input: { ticket: Ticket; message: Message }): Promise<void>;
+  /**
+   * An agent is about to send a reply. Throws a SupportError when Autopilot is sending, or has
+   * just sent, its own reply to the same message: the customer must not get two. Otherwise it
+   * takes any reply Autopilot was holding on the ticket, so that one can no longer go out.
+   */
+  replyStarting(input: { ticketId: string; suggestionId: string | null }): Promise<void>;
   /** An agent's reply went out. Must not throw. */
   replySent(input: { ticketId: string; suggestionId: string | null; message: Message; text: string }): Promise<void>;
   ticketDetail(ticketId: string): Promise<{ insight: TicketInsight | null; suggestion: SuggestionView | null }>;
@@ -292,6 +307,12 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
         return null;
       }
     },
+    teamName: options.fromName ?? null,
+    sendUnattended: (input) =>
+      sendUnattended(input).catch((error) => {
+        log("error", "ai: an unattended reply couldn't be sent", { ticketId: input.ticketId, error: String(error) });
+        return null;
+      }),
     now,
     log,
   });
@@ -1022,6 +1043,15 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
     const signature = options.signature ? options.signature(agent) : agent.name.split(" ")[0] ?? "";
     const body = signature && ch.kind === "email" ? `${text}\n\n${signature}` : text;
 
+    if (ai) {
+      try {
+        await ai.replyStarting({ ticketId: ticket.id, suggestionId: input.suggestionId ?? null });
+      } catch (error) {
+        if (error instanceof SupportError) throw error;
+        log("error", "ai: checking for a held reply failed", { ticketId: ticket.id, error: String(error) });
+      }
+    }
+
     const message = await sendOutbound(ch, ticket, {
       text: body,
       displayText: text,
@@ -1070,6 +1100,45 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
       }
     }
     return { message, ticket: updated };
+  }
+
+  /** A reply that goes out with no agent behind it. Only Autopilot calls this, after its own checks. */
+  async function sendUnattended(input: { ticketId: string; text: string; signature: string | null }): Promise<Message | null> {
+    const text = input.text.trim();
+    const ticket = await store.getTicket(input.ticketId);
+    const ch = ticket ? channel(ticket.channelId) : null;
+    if (!ticket || ticket.status === "spam" || !ch || !text || replyBlockedReason(ticket, ch)) return null;
+    const limit = ch.capabilities.maxTextLength;
+    if (limit && text.length > limit) return null;
+    const contact = await store.getContact(ticket.contactId);
+    if (!contact) return null;
+    const recipients = recipientsFor(await store.listMessages(ticket.id, { includeNotes: false }), ch, contact, await teamDirectory());
+    if (!recipients.to) return null;
+    const signed = input.signature?.trim() ? `${text}\n\n${input.signature.trim()}` : text;
+    const message = await sendOutbound(ch, ticket, {
+      // A channel too short for the signature gets the reply alone.
+      text: limit && signed.length > limit ? text : signed,
+      displayText: text,
+      to: [recipients.to],
+      cc: recipients.cc,
+      auto: false,
+      authorId: null,
+      attachments: [],
+      replyTo: recipients.replyTo,
+    });
+    if (message.deliveryStatus === "failed") return message;
+    const at = message.createdAt;
+    await store.updateTicket(ticket.id, {
+      status: "waiting",
+      waitingSince: null,
+      lastOutboundAt: at,
+      lastMessageAt: at,
+      solvedAt: null,
+      preview: snippet(text),
+      previewKind: "outbound",
+      previewAuthorId: null,
+    });
+    return message;
   }
 
   async function loadUploads(ticketId: string, ids: string[], ch: Channel | null) {

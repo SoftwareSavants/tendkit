@@ -71,7 +71,8 @@
       "topicChanged": "{actor} set the topic to {topic}",
       "actionRan": "{actor} ran {title}",
       "actionFailed": "{actor} ran {title}, and it didn't go through",
-      "actionUnconfirmed": "{actor} ran {title}, and it didn't confirm"
+      "actionUnconfirmed": "{actor} ran {title}, and it didn't confirm",
+      "autopilotFlagged": "{actor} flagged Autopilot's reply as wrong"
     },
     "account": "Account"
   },
@@ -260,6 +261,96 @@
         "timedOut": "{title} took too long to confirm, so it may or may not have gone through. Check the customer's account before you try again.",
         "errored": "{title} stopped before it could confirm. Check the customer's account before you try again.",
         "request": "Couldn't run this. Check your connection and try again."
+      }
+    },
+    "autopilot": {
+      "name": "Autopilot",
+      "heading": "Autopilot",
+      "help": "Topics you switch on are answered without waiting for an agent. A topic can be switched on once its drafts have proved right, and any agent can stop it.",
+      "rule": "A topic is ready after {drafts} drafts in {days} days with {rate}% sent as drafted or lightly edited.",
+      "raise": "Raise the bar",
+      "minDrafts": "Drafts needed",
+      "minRate": "Sent as drafted or lightly edited, %",
+      "floor": "At least {drafts} drafts and {rate}%. That minimum is set in your code.",
+      "stop": "Stop Autopilot",
+      "stopped": "Autopilot is stopped. Nothing is sent without an agent.",
+      "stoppedBy": "Stopped by {name} · {when}",
+      "start": "Start again",
+      "empty": "Add topics above. Autopilot is switched on topic by topic.",
+      "stage": {
+        "collecting": "Collecting evidence",
+        "eligible": "Ready",
+        "on": "On",
+        "paused": "Paused"
+      },
+      "mode": {
+        "hold": "Hold for review",
+        "immediate": "Send immediately"
+      },
+      "modeLabel": "How {topic} replies are sent",
+      "modeHelp": {
+        "hold": "Each reply waits {minutes} minutes on its ticket, where any agent can stop it. Recommended to start.",
+        "immediate": "Each reply goes out as soon as it's written."
+      },
+      "evidence": "{good} of the last {drafts} drafts sent as drafted or lightly edited ({rate}%)",
+      "progress": "{drafts} of {needed} drafts so far",
+      "counts": {
+        "used": "{count} as drafted",
+        "light": "{count} lightly edited",
+        "heavy": "{count} rewritten",
+        "discarded": "{count} discarded",
+        "unhappy": "{count} came back unhappy",
+        "flagged": "{count} flagged as wrong"
+      },
+      "cannotAnswer": "{count} it couldn't answer went to an agent",
+      "reopened": "{count} reopened after the reply",
+      "sentByAutopilot": "{count} sent by Autopilot",
+      "switchOn": "Switch on",
+      "switchOff": "Switch off",
+      "resume": "Resume",
+      "enabledBy": "Switched on by {name} · {when}",
+      "pausedQuality": "Paused {when}: under {rate}% of its recent drafts were right. It can resume once the record recovers.",
+      "pausedFlagged": "Paused {when}: an agent flagged a reply as wrong. Read the drafts, then resume.",
+      "examples": "See the drafts",
+      "examplesTitle": "{topic}: recent drafts",
+      "examplesDescription": "Each draft and how it ended, newest first.",
+      "onlyChanged": "Only the ones that weren't right",
+      "noExamples": "Nothing to show.",
+      "sentInstead": "Sent instead",
+      "outcome": {
+        "used": "Sent as drafted",
+        "light": "Lightly edited",
+        "heavy": "Rewritten",
+        "discarded": "Discarded",
+        "flagged": "Flagged as wrong",
+        "unhappy": "Customer came back unhappy"
+      },
+      "switchOnTitle": "Switch on Autopilot for {topic}",
+      "switchOnDescription": "Replies on this topic go out without an agent reading them first. A reply that fails any check stays a suggested reply.",
+      "sentBy": "Sent by Autopilot · {topic}",
+      "flag": "Flag as wrong",
+      "flagNote": "Add a note",
+      "flagNotePlaceholder": "What was wrong?",
+      "flaggedBy": "{actor} flagged this as wrong",
+      "held": "Autopilot sends this reply at {time} unless you stop it.",
+      "stopHeld": "Stop and edit",
+      "left": "Autopilot left this to you: {reason}.",
+      "block": {
+        "stopped": "Autopilot is stopped",
+        "unknown_customer": "the sender isn't linked to a customer",
+        "channel": "it doesn't answer on this channel",
+        "asked_for_human": "the customer asked for a person",
+        "not_helped": "the customer says the last reply didn't help",
+        "mood": "the customer sounds upset",
+        "urgency": "the ticket is urgent",
+        "long_thread": "the conversation has gone back and forth",
+        "needs_approval": "the reply needs an action approved",
+        "not_confident": "it wasn't sure of the answer",
+        "unsourced": "the answer isn't fully backed by your sources",
+        "language": "it has no record in this language yet",
+        "hourly_cap": "it reached its hourly limit",
+        "moved_on": "the ticket changed before it was due",
+        "send_failed": "it couldn't be sent"
       }
     }
   },

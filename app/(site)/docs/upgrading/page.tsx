@@ -44,7 +44,11 @@ export default function Upgrading() {
         an update adds: <code>0001_ai.sql</code> for the AI tables, <code>0002_memory.sql</code> for AI memory (approved
         answers, corrections, guidance suggestions and gaps, plus two columns on <code>support_ai_settings</code>),{" "}
         <code>0003_actions.sql</code> for AI actions (the <code>support_action_runs</code> log, plus a column each on{" "}
-        <code>support_suggestions</code> and <code>support_ai_settings</code>). Apply
+        <code>support_suggestions</code> and <code>support_ai_settings</code>), <code>0004_autopilot.sql</code> for
+        Autopilot (the <code>support_autopilot_topics</code> table and columns on <code>support_suggestions</code>,{" "}
+        <code>support_ticket_insights</code> and <code>support_ai_settings</code>; its two closing <code>UPDATE</code>{" "}
+        statements file the outcomes you already recorded under their topics, so keep them when you write your own
+        migration). Apply
         the migration before you deploy the updated code.
       </p>
     </DocsShell>

@@ -81,6 +81,11 @@ export type Suggestion = {
   reason: string | null;
   sources: SuggestionSource[];
   actions?: ProposedAction[];
+  /** With Autopilot: "held" while the reply waits to be sent on its own, at `sendAt`. */
+  autopilot?: "held" | "sending" | "sent" | "cancelled" | "failed" | null;
+  sendAt?: DateLike | null;
+  /** Why Autopilot left this reply to an agent, on a topic that is switched on. */
+  autopilotBlock?: string | null;
 };
 
 export type TicketListItem = {
@@ -135,7 +140,9 @@ export type TimelineEvent = {
     | "contact_changed"
     | "forwarded"
     | "insight_changed"
-    | "action_run";
+    | "action_run"
+    | "autopilot_sent"
+    | "autopilot_flagged";
   actorId: string | null;
   data: Record<string, unknown>;
   createdAt: DateLike;
@@ -217,6 +224,64 @@ export type Gap = {
   tickets: { id: string; number: number; subject: string | null }[];
 };
 
+export type AutopilotMode = "hold" | "immediate";
+
+/** A topic's recorded outcomes over the window. The six counts after `drafts` add up to it. */
+export type AutopilotRecord = {
+  drafts: number;
+  usedAsIs: number;
+  lightlyEdited: number;
+  heavilyEdited: number;
+  discarded: number;
+  cameBackUnhappy: number;
+  flagged: number;
+  cannotAnswer: number;
+  sentByAutopilot: number;
+  reopened: number;
+  /** The latest drafts, as many as a topic needs: what readiness is judged by. */
+  recent: { drafts: number; good: number; rate: number };
+  languages: { language: string; drafts: number; good: number }[];
+};
+
+export type AutopilotTopic = {
+  topic: string;
+  /** collecting: not enough evidence yet. eligible: ready to be switched on. */
+  stage: "collecting" | "eligible" | "on" | "paused";
+  mode: AutopilotMode | null;
+  enabledBy: Agent | null;
+  enabledAt: DateLike | null;
+  pausedAt: DateLike | null;
+  pauseReason: "quality" | "flagged" | null;
+  /** The record meets the thresholds: a paused topic can be resumed. */
+  ready: boolean;
+  record: AutopilotRecord;
+};
+
+/** `support.ai.getAutopilot()`. */
+export type AutopilotOverview = {
+  stopped: boolean;
+  stoppedBy: Agent | null;
+  stoppedAt: DateLike | null;
+  minDrafts: number;
+  minRate: number;
+  /** The thresholds set in code: the team can ask for more, never less. */
+  floor: { minDrafts: number; minRate: number };
+  windowDays: number;
+  holdMinutes: number;
+  topics: AutopilotTopic[];
+};
+
+export type AutopilotExample = {
+  suggestionId: string;
+  ticket: { id: string; number: number; subject: string | null };
+  outcome: "used" | "light" | "heavy" | "discarded" | "flagged" | "unhappy";
+  byAutopilot: boolean;
+  draft: string;
+  /** What the agent sent instead. */
+  sent: string | null;
+  at: DateLike;
+};
+
 /**
  * The AI methods, each calling `support.ai` on your server. Leave `ai` off the client and the
  * screens show no AI at all.
@@ -272,6 +337,24 @@ export interface SupportAiClient {
   declineAction?(input: { ticketId: string; suggestionId: string; action: string; text?: string }): Promise<{ text?: string | null }>;
   /** `support.ai.setActionEnabled`: stops, or lets, AI run a lookup on its own. */
   setActionEnabled?(input: { name: string; enabled: boolean }): Promise<unknown>;
+
+  /*
+   * Autopilot. Optional like the rest: with `getAutopilot` and `setAutopilotTopic`, AI settings
+   * show each topic's readiness; `flagAutopilotReply` and `holdAutopilotReply` put the flag and the
+   * stop on the ticket. Pass your signed-in agent's id as `actorId` on the server for each write,
+   * and decide there who may call `setAutopilotTopic` and `setAutopilot`.
+   */
+  getAutopilot?(): Promise<AutopilotOverview>;
+  /** `support.ai.setAutopilotTopic`: switches a topic on (refused until it's ready) or off, or changes how it sends. */
+  setAutopilotTopic?(input: { topic: string; on: boolean; mode?: AutopilotMode }): Promise<unknown>;
+  /** `support.ai.setAutopilot`: the kill switch, and thresholds stricter than the ones in code (`minRate` is 0 to 1). */
+  setAutopilot?(input: { stopped?: boolean; minDrafts?: number | null; minRate?: number | null }): Promise<unknown>;
+  /** `support.ai.autopilotExamples`: a topic's recent drafts with how each ended. */
+  autopilotExamples?(input: { topic: string; only?: "changed" }): Promise<AutopilotExample[]>;
+  /** `support.ai.holdAutopilotReply`: stops a held reply. It stays on the ticket as a suggested reply. */
+  holdAutopilotReply?(input: { suggestionId: string }): Promise<unknown>;
+  /** `support.ai.flagAutopilotReply`: marks a reply Autopilot sent as wrong, which pauses its topic. */
+  flagAutopilotReply?(input: { suggestionId: string; note?: string }): Promise<unknown>;
 }
 
 export interface SupportClient {

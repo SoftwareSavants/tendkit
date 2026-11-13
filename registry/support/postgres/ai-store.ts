@@ -1,11 +1,13 @@
-import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, max, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, max, notInArray, or, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
-import { DEFAULT_AI_SETTINGS, URGENCY_RANK, type AiSettings, type AiStore, type ExampleRow, type InsightRow, type SuggestionRow } from "../ai-store";
-import type { ActionRun, ApprovedAnswer, Gap, GuidanceSuggestion, Mood, Suggestion, SuggestionStatus, Urgency } from "../types";
+import { DEFAULT_AI_SETTINGS, URGENCY_RANK, type AiSettings, type AiStore, type AutopilotTopic, type ExampleRow, type InsightRow, type SuggestionRow } from "../ai-store";
+import type { OutcomeRow } from "../autopilot";
+import type { ActionRun, ApprovedAnswer, AutopilotBlock, AutopilotState, Gap, GuidanceSuggestion, Mood, Suggestion, SuggestionStatus, Urgency } from "../types";
 import {
   supportActionRuns,
   supportAiSettings,
   supportApprovedAnswers,
+  supportAutopilotTopics,
   supportExamples,
   supportExampleTerms,
   supportGaps,
@@ -328,6 +330,8 @@ export function createPostgresAiStore(db: Db): AiStore {
           reason: supportSuggestions.reason,
           createdAt: supportSuggestions.createdAt,
           decidedAt: supportSuggestions.decidedAt,
+          flaggedAt: supportSuggestions.flaggedAt,
+          flagNote: supportSuggestions.flagNote,
         })
         .from(supportSuggestions)
         .where(
@@ -338,17 +342,20 @@ export function createPostgresAiStore(db: Db): AiStore {
               eq(supportSuggestions.status, "discarded"),
               gte(supportSuggestions.decidedAt, after),
               lt(supportSuggestions.decidedAt, until)
-            )
+            ),
+            and(gte(supportSuggestions.flaggedAt, after), lt(supportSuggestions.flaggedAt, until))
           )
         )
-        .orderBy(sql`case when ${supportSuggestions.kind} = 'cannot_answer' then ${supportSuggestions.createdAt} else ${supportSuggestions.decidedAt} end`)
+        .orderBy(
+          sql`case when ${supportSuggestions.flaggedAt} is not null then ${supportSuggestions.flaggedAt} when ${supportSuggestions.kind} = 'cannot_answer' then ${supportSuggestions.createdAt} else ${supportSuggestions.decidedAt} end`
+        )
         .limit(limit);
       return rows.map((r) => ({
         suggestionId: r.suggestionId,
         ticketId: r.ticketId,
         messageId: r.messageId,
-        reason: r.kind === "cannot_answer" ? r.reason : null,
-        at: r.kind === "cannot_answer" ? r.createdAt : r.decidedAt ?? r.createdAt,
+        reason: r.flaggedAt ? `An agent flagged the reply Autopilot sent as wrong${r.flagNote ? `: ${r.flagNote}` : "."}` : r.kind === "cannot_answer" ? r.reason : null,
+        at: r.flaggedAt ?? (r.kind === "cannot_answer" ? r.createdAt : r.decidedAt ?? r.createdAt),
       }));
     },
 
@@ -451,6 +458,117 @@ export function createPostgresAiStore(db: Db): AiStore {
         .limit("limit" in input ? input.limit : 100);
       return rows.map(toActionRun);
     },
+
+    async listAutopilotTopics() {
+      const rows = await db.select().from(supportAutopilotTopics).orderBy(asc(supportAutopilotTopics.topic));
+      return rows.map(toAutopilotTopic);
+    },
+
+    async saveAutopilotTopic(topic) {
+      const row = { ...topic, updatedAt: new Date() };
+      await db.insert(supportAutopilotTopics).values(row).onConflictDoUpdate({ target: supportAutopilotTopics.topic, set: row });
+    },
+
+    async pauseAutopilotTopic(topic, reason, at) {
+      const rows = await db
+        .update(supportAutopilotTopics)
+        .set({ status: "paused", pauseReason: reason, pausedAt: at, updatedAt: at })
+        .where(and(eq(supportAutopilotTopics.topic, topic), eq(supportAutopilotTopics.status, "on")))
+        .returning({ topic: supportAutopilotTopics.topic });
+      return rows.length > 0;
+    },
+
+    async listOutcomes({ since, topic, limit }) {
+      const rows = await db
+        .select({
+          suggestionId: supportSuggestions.id,
+          ticketId: supportSuggestions.ticketId,
+          topic: supportSuggestions.topic,
+          language: supportSuggestions.language,
+          kind: supportSuggestions.kind,
+          status: supportSuggestions.status,
+          change: supportSuggestions.change,
+          autopilot: supportSuggestions.autopilot,
+          followUp: supportSuggestions.followUp,
+          flaggedAt: supportSuggestions.flaggedAt,
+          flagReviewedAt: supportSuggestions.flagReviewedAt,
+          createdAt: supportSuggestions.createdAt,
+          decidedAt: supportSuggestions.decidedAt,
+        })
+        .from(supportSuggestions)
+        .where(and(gte(supportSuggestions.createdAt, since), topic !== undefined ? eq(supportSuggestions.topic, topic) : isNotNull(supportSuggestions.topic)))
+        .orderBy(desc(supportSuggestions.createdAt), desc(supportSuggestions.id))
+        .limit(limit);
+      return rows.map((r) => ({
+        ...r,
+        kind: r.kind as OutcomeRow["kind"],
+        status: r.status as SuggestionStatus,
+        autopilot: r.autopilot as AutopilotState | null,
+        followUp: r.followUp as OutcomeRow["followUp"],
+      }));
+    },
+
+    async claimHeldSuggestion(id, at) {
+      const rows = await db
+        .update(supportSuggestions)
+        .set({ autopilot: "sending", sendAt: at })
+        .where(and(eq(supportSuggestions.id, id), eq(supportSuggestions.status, "pending"), eq(supportSuggestions.autopilot, "held")))
+        .returning({ id: supportSuggestions.id });
+      return rows.length > 0;
+    },
+
+    async setSuggestionAutopilot(id, patch) {
+      await db
+        .update(supportSuggestions)
+        .set(patch)
+        .where(and(eq(supportSuggestions.id, id), eq(supportSuggestions.status, "pending")));
+    },
+
+    async listHeldSuggestions({ dueBefore, limit }) {
+      const rows = await db
+        .select()
+        .from(supportSuggestions)
+        .where(and(eq(supportSuggestions.autopilot, "held"), eq(supportSuggestions.status, "pending"), lte(supportSuggestions.sendAt, dueBefore)))
+        .orderBy(asc(supportSuggestions.sendAt))
+        .limit(limit);
+      return rows.map(toSuggestion);
+    },
+
+    async countAutopilotSent(since) {
+      const [row] = await db
+        .select({ sent: count() })
+        .from(supportSuggestions)
+        .where(and(eq(supportSuggestions.autopilot, "sent"), gte(supportSuggestions.decidedAt, since)));
+      return Number(row?.sent ?? 0);
+    },
+
+    async suggestionForMessage(messageId) {
+      const [row] = await db.select().from(supportSuggestions).where(eq(supportSuggestions.sentMessageId, messageId)).limit(1);
+      return row ? toSuggestionRow(row) : null;
+    },
+
+    async setFollowUp(id, followUp) {
+      await db
+        .update(supportSuggestions)
+        .set({ followUp })
+        .where(and(eq(supportSuggestions.id, id), followUp === "reopened" ? isNull(supportSuggestions.followUp) : undefined));
+    },
+
+    async flagSuggestion(id, input, at) {
+      const rows = await db
+        .update(supportSuggestions)
+        .set({ flaggedAt: at, flaggedBy: input.by, flagNote: input.note, flagReviewedAt: null })
+        .where(and(eq(supportSuggestions.id, id), eq(supportSuggestions.autopilot, "sent"), isNull(supportSuggestions.flaggedAt)))
+        .returning({ id: supportSuggestions.id });
+      return rows.length > 0;
+    },
+
+    async reviewFlags(topic, at) {
+      await db
+        .update(supportSuggestions)
+        .set({ flagReviewedAt: at })
+        .where(and(eq(supportSuggestions.topic, topic), isNotNull(supportSuggestions.flaggedAt), isNull(supportSuggestions.flagReviewedAt)));
+    },
   };
   return store;
 }
@@ -464,6 +582,22 @@ function toSettings(row: typeof supportAiSettings.$inferSelect): AiSettings {
     memoryRunAt: row.memoryRunAt,
     memoryCursor: row.memoryCursor,
     disabledActions: row.disabledActions,
+    autopilotStoppedAt: row.autopilotStoppedAt,
+    autopilotStoppedBy: row.autopilotStoppedBy,
+    autopilotMinDrafts: row.autopilotMinDrafts,
+    autopilotMinRate: row.autopilotMinRate,
+  };
+}
+
+function toAutopilotTopic(row: typeof supportAutopilotTopics.$inferSelect): AutopilotTopic {
+  return {
+    topic: row.topic,
+    mode: row.mode === "immediate" ? "immediate" : "hold",
+    status: row.status as AutopilotTopic["status"],
+    enabledBy: row.enabledBy,
+    enabledAt: row.enabledAt,
+    pausedAt: row.pausedAt,
+    pauseReason: row.pauseReason as AutopilotTopic["pauseReason"],
   };
 }
 
@@ -486,6 +620,11 @@ function toSuggestion(row: typeof supportSuggestions.$inferSelect): Suggestion {
     sources: row.sources,
     actions: row.actions,
     status: row.status as SuggestionStatus,
+    topic: row.topic,
+    language: row.language,
+    autopilot: row.autopilot as AutopilotState | null,
+    sendAt: row.sendAt,
+    autopilotBlock: row.autopilotBlock as AutopilotBlock | null,
     createdAt: row.createdAt,
   };
 }
@@ -499,6 +638,11 @@ function toSuggestionRow(row: typeof supportSuggestions.$inferSelect): Suggestio
     sentMessageId: row.sentMessageId,
     finalText: row.finalText,
     decidedAt: row.decidedAt,
+    change: row.change,
+    followUp: row.followUp as SuggestionRow["followUp"],
+    flaggedAt: row.flaggedAt,
+    flaggedBy: row.flaggedBy,
+    flagNote: row.flagNote,
   };
 }
 

@@ -14,13 +14,14 @@ import type { ActionSetting, ApprovedAnswer, Gap, GuidanceSuggestion } from "./c
 import { formatWhen } from "./format";
 import { languageName } from "./ai";
 import { ApprovedAnswerDialog, ArticleDialog } from "./memory";
+import { AutopilotSettings } from "./autopilot";
 
 type Form = { guidance: string; topics: string[]; draftOnArrival: boolean };
 
 /**
  * Where a team tells AI how they answer: guidance, topics, whether to suggest replies, and what it
  * knows. With memory, also what it learned from them: rules their edits suggest, the answers they
- * approved, and the questions that went unanswered.
+ * approved, and the questions that went unanswered. With Autopilot, which topics it answers alone.
  */
 export function SupportAiSettings() {
   const { client, t, locale } = useSupport();
@@ -187,6 +188,7 @@ export function SupportAiSettings() {
         {sync.error && <p className="text-sm text-destructive">{t("ai.failed")}</p>}
       </section>
 
+      <AutopilotSettings />
       <Actions actions={saved.actions ?? []} />
       <ApprovedAnswers />
       <Gaps />

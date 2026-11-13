@@ -4,6 +4,10 @@ import type {
   Agent,
   AiSettings,
   ApprovedAnswer,
+  AutopilotExample,
+  AutopilotOverview,
+  AutopilotRecord,
+  AutopilotTopic,
   Customer,
   FileInfo,
   Gap,
@@ -33,6 +37,9 @@ import type {
  * So is its memory: the approved answers, the rule suggested from edits and the unanswered
  * questions are seeded here, and "generalising" a reply swaps the names it knows for placeholders.
  * And its actions: three stand-ins for what an app would declare, with results written here.
+ * And Autopilot: each topic's track record is written here as the weeks of agents' work a real
+ * install computes it from. One topic is ready, one is on (with a reply waiting out its delay and
+ * one already sent), one is paused. Switching, stopping and flagging behave as the service does.
  */
 
 export const VIEWER: Agent = { id: "agent_you", name: "Alex Chen" };
@@ -142,6 +149,7 @@ type State = {
   answers: ApprovedAnswer[];
   guidanceSuggestions: GuidanceSuggestion[];
   gaps: Gap[];
+  autopilot: Omit<AutopilotOverview, "topics"> & { topics: AutopilotTopic[]; examples: Record<string, AutopilotExample[]> };
   messages: Map<string, TimelineMessage[]>;
   events: Map<string, TimelineEvent[]>;
   reads: Map<string, Date>;
@@ -216,6 +224,7 @@ function seed(): State {
     ],
     guidanceSuggestions: [],
     gaps: [],
+    autopilot: { stopped: false, stoppedBy: null, stoppedAt: null, minDrafts: 30, minRate: 0.9, floor: { minDrafts: 30, minRate: 0.9 }, windowDays: 30, holdMinutes: 10, topics: [], examples: {} },
     seq: 1040,
     messages: new Map(),
     events: new Map(),
@@ -463,6 +472,49 @@ function seed(): State {
     },
   });
 
+  // Billing is on Autopilot: one reply went out an hour ago, and one is waiting out its delay.
+  add({
+    channel: "email",
+    name: "Giulia Rossi",
+    identity: "giulia@rossi.studio",
+    account: "acc_rossi",
+    subject: "Where do I download last month's invoice?",
+    status: "waiting",
+    read: true,
+    thread: [
+      { kind: "inbound", ago: 95, text: "Hello, our accountant needs last month's invoice as a PDF. Where can I download it?\n\nGiulia" },
+      {
+        kind: "outbound",
+        ago: 84,
+        text: "Hi Giulia,\n\nYou can download any invoice from Billing, then Invoices: open last month's and choose Download PDF. Everyone with the Admin role on Rossi Studio can do this.",
+      },
+    ],
+    ai: { insight: { topic: "Billing", urgency: "normal", urgencyReason: null, mood: "calm", language: "en", summary: "Needs last month's invoice as a PDF" }, suggestion: null },
+  });
+  add({
+    channel: "email",
+    name: "Ingrid Larsen",
+    identity: "ingrid@nordvik.test",
+    account: "acc_nordvik",
+    subject: "Add our VAT number to invoices",
+    status: "open",
+    thread: [{ kind: "inbound", ago: 7, text: "Hi, our invoices are missing our VAT number. How do we add it, and can last month's invoice be corrected too?\n\nIngrid" }],
+    ai: {
+      insight: { topic: "Billing", urgency: "normal", urgencyReason: null, mood: "calm", language: "en", summary: "Wants their VAT number on new and past invoices" },
+      suggestion: {
+        kind: "draft",
+        text: "Hi Ingrid,\n\nYou can add your VAT number from Billing, then Company details. Every new invoice carries it from then on.\n\nTo correct last month's invoice, open it under Billing, then Invoices, and choose Edit: the corrected PDF is ready to download straight away.",
+        reason: null,
+        sources: [
+          { type: "knowledge", id: "help-center/invoice-details", title: "Invoices and tax details" },
+          { type: "fact", id: "fact:1", title: "Plan" },
+        ],
+        autopilot: "held",
+        sendAt: new Date(Date.now() + 3 * 60_000),
+      },
+    },
+  });
+
   // What the team's work has taught so far, pointing at the tickets above.
   const about = (subject: string) => {
     const t = state.tickets.find((x) => x.subject === subject)!;
@@ -481,6 +533,126 @@ function seed(): State {
     { id: "gap_annual", theme: "Discount for annual billing", count: 1, lastSeenAt: minutes(48), tickets: [about("Do you offer annual billing?")] },
     { id: "gap_export", theme: "CSV export stops at 1,000 rows", count: 1, lastSeenAt: minutes(720), tickets: [about("Export to CSV isn't showing all rows")] },
   ];
+
+  const invoice = about("Where do I download last month's invoice?");
+  const sentReply = state.messages.get(invoice.id)!.at(-1)!;
+  state.events.get(invoice.id)!.push({
+    id: nextId("evt"),
+    type: "autopilot_sent",
+    actorId: null,
+    data: { messageId: sentReply.id, suggestionId: "sug_autopilot_invoice", topic: "Billing", mode: "hold" },
+    createdAt: sentReply.createdAt,
+  });
+
+  // Each topic's last 30 days, as recorded outcomes add up to in a real install.
+  const record = (r: Omit<AutopilotRecord, "recent"> & { recent: [good: number, drafts: number] }): AutopilotRecord => ({
+    ...r,
+    recent: { good: r.recent[0], drafts: r.recent[1], rate: r.recent[0] / r.recent[1] },
+  });
+  const never = { mode: null, enabledBy: null, enabledAt: null, pausedAt: null, pauseReason: null };
+  state.autopilot.topics = [
+    {
+      topic: "Payouts",
+      stage: "eligible",
+      ...never,
+      ready: true,
+      record: record({ drafts: 41, usedAsIs: 31, lightlyEdited: 6, heavilyEdited: 2, discarded: 2, cameBackUnhappy: 0, flagged: 0, cannotAnswer: 3, sentByAutopilot: 0, reopened: 2, recent: [28, 30], languages: [{ language: "en", drafts: 38, good: 34 }, { language: "es", drafts: 3, good: 3 }] }),
+    },
+    {
+      topic: "Billing",
+      stage: "on",
+      mode: "hold",
+      enabledBy: AGENTS[1]!,
+      enabledAt: minutes(6 * 24 * 60),
+      pausedAt: null,
+      pauseReason: null,
+      ready: true,
+      record: record({ drafts: 58, usedAsIs: 49, lightlyEdited: 6, heavilyEdited: 1, discarded: 1, cameBackUnhappy: 1, flagged: 0, cannotAnswer: 4, sentByAutopilot: 17, reopened: 1, recent: [29, 30], languages: [{ language: "en", drafts: 53, good: 50 }, { language: "es", drafts: 5, good: 5 }] }),
+    },
+    {
+      topic: "Account access",
+      stage: "paused",
+      mode: "hold",
+      enabledBy: AGENTS[2]!,
+      enabledAt: minutes(19 * 24 * 60),
+      pausedAt: minutes(26 * 60),
+      pauseReason: "quality",
+      ready: false,
+      record: record({ drafts: 36, usedAsIs: 22, lightlyEdited: 5, heavilyEdited: 5, discarded: 3, cameBackUnhappy: 1, flagged: 0, cannotAnswer: 6, sentByAutopilot: 9, reopened: 3, recent: [25, 30], languages: [{ language: "en", drafts: 36, good: 27 }] }),
+    },
+    {
+      topic: "Exports",
+      stage: "collecting",
+      ...never,
+      ready: false,
+      record: record({ drafts: 12, usedAsIs: 7, lightlyEdited: 2, heavilyEdited: 2, discarded: 1, cameBackUnhappy: 0, flagged: 0, cannotAnswer: 5, sentByAutopilot: 0, reopened: 0, recent: [9, 12], languages: [{ language: "en", drafts: 12, good: 9 }] }),
+    },
+  ];
+  const twoFactor = about("Two-factor codes not arriving");
+  const billingEmail = about("Change our billing email");
+  const exporting = about("Export to CSV isn't showing all rows");
+  state.autopilot.examples = {
+    Payouts: [
+      { suggestionId: "ex_p1", ticket: payout, outcome: "used", byAutopilot: false, at: minutes(170), sent: null, draft: "Hi Emma,\n\nPayouts leave our side every Monday, and banks take up to 3 business days to show them. Yours left on Monday, so it should arrive by Thursday." },
+      {
+        suggestionId: "ex_p2",
+        ticket: payout,
+        outcome: "light",
+        byAutopilot: false,
+        at: minutes(2 * 24 * 60),
+        draft: "Hello,\n\nYour payout was sent on Monday. Banks can take up to 3 business days to show it.",
+        sent: "Hi Emma,\n\nYour payout was sent on Monday. Banks can take up to 3 business days to show it.",
+      },
+      {
+        suggestionId: "ex_p3",
+        ticket: payout,
+        outcome: "heavy",
+        byAutopilot: false,
+        at: minutes(9 * 24 * 60),
+        draft: "Hi Emma,\n\nPayouts take up to 3 business days to reach your bank.",
+        sent: "Hi Emma,\n\nThis one was held back: the bank account on file was changed last week, and we verify new accounts before paying into them. I've verified it now and the payout goes out today.",
+      },
+      { suggestionId: "ex_p4", ticket: payout, outcome: "discarded", byAutopilot: false, at: minutes(16 * 24 * 60), sent: null, draft: "Hi Emma,\n\nPayouts leave our side every Monday. Yours is on its way." },
+    ],
+    Billing: [
+      { suggestionId: "sug_autopilot_invoice", ticket: invoice, outcome: "used", byAutopilot: true, at: minutes(84), sent: null, draft: sentReply.text },
+      {
+        suggestionId: "ex_b2",
+        ticket: billingEmail,
+        outcome: "light",
+        byAutopilot: false,
+        at: minutes(3 * 24 * 60),
+        draft: "Hi,\n\nYou can change the billing email from Billing, then Company details. Invoices go to the new address from the next one on.",
+        sent: "Hi Emma,\n\nYou can change the billing email from Billing, then Company details. Invoices go to the new address from the next one on.",
+      },
+      { suggestionId: "ex_b3", ticket: billingEmail, outcome: "unhappy", byAutopilot: true, at: minutes(11 * 24 * 60), sent: null, draft: "Hi,\n\nRefunds go back to the original payment method within 5 business days." },
+    ],
+    "Account access": [
+      {
+        suggestionId: "ex_a1",
+        ticket: twoFactor,
+        outcome: "heavy",
+        byAutopilot: false,
+        at: minutes(27 * 60),
+        draft: "Hi,\n\nTwo-factor codes are sent by text message. Check that your phone has signal and ask for a new code.",
+        sent: "Hi,\n\nCodes to numbers on your carrier were delayed this morning, and that's fixed now. Ask for a new code and it should arrive within a minute. If you're locked out, reply here and I'll send a one-time recovery link.",
+      },
+      { suggestionId: "ex_a2", ticket: twoFactor, outcome: "discarded", byAutopilot: false, at: minutes(30 * 60), sent: null, draft: "Hi,\n\nYou can reset two-factor authentication from Settings, then Security." },
+      { suggestionId: "ex_a3", ticket: twoFactor, outcome: "used", byAutopilot: true, at: minutes(4 * 24 * 60), sent: null, draft: "Hi,\n\nYou can add another admin from Settings, then Team: choose Invite and pick the Admin role." },
+    ],
+    Exports: [
+      {
+        suggestionId: "ex_e1",
+        ticket: exporting,
+        outcome: "heavy",
+        byAutopilot: false,
+        at: minutes(12 * 60),
+        draft: "Hi,\n\nExports include every row that matches your filters.",
+        sent: "Hi,\n\nExports from the table stop at 1,000 rows. For everything, use Reports, then Full export: it's emailed to you as a CSV within a few minutes.",
+      },
+      { suggestionId: "ex_e2", ticket: exporting, outcome: "used", byAutopilot: false, at: minutes(5 * 24 * 60), sent: null, draft: "Hi,\n\nYou can export any table from the menu at its top right, as CSV or Excel." },
+    ],
+  };
   return state;
 }
 
@@ -619,6 +791,46 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
   };
   const URGENCY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 };
 
+  // Autopilot. A topic nobody switched on is "eligible" or "collecting" by its record alone.
+  const pilot = s.autopilot;
+  const meets = (topic: AutopilotTopic) => topic.record.recent.drafts >= pilot.minDrafts && topic.record.recent.rate >= pilot.minRate;
+  const restage = () => {
+    for (const topic of pilot.topics) {
+      topic.ready = meets(topic);
+      if (topic.stage === "collecting" || topic.stage === "eligible") topic.stage = topic.ready ? "eligible" : "collecting";
+    }
+  };
+  /** Sends the held replies whose time has come, as the scheduled run does. */
+  const sendDue = () => {
+    for (const [ticketId, suggestion] of s.suggestions) {
+      if (suggestion.autopilot !== "held" || !suggestion.sendAt || +new Date(suggestion.sendAt) > Date.now()) continue;
+      const t = ticket(ticketId);
+      const topic = pilot.topics.find((x) => x.topic === s.insights.get(ticketId)?.topic);
+      if (pilot.stopped || topic?.stage !== "on" || t.status !== "open") {
+        s.suggestions.set(ticketId, { ...suggestion, autopilot: "cancelled", autopilotBlock: pilot.stopped ? "stopped" : "moved_on", sendAt: null });
+        continue;
+      }
+      const at = new Date();
+      const sent = message({ kind: "outbound", text: suggestion.text ?? "", createdAt: at, to: recipients(t).to ? [recipients(t).to!] : [] });
+      s.messages.get(ticketId)!.push(sent);
+      s.events.get(ticketId)!.push({ id: nextId("evt"), type: "autopilot_sent", actorId: null, data: { messageId: sent.id, suggestionId: suggestion.id, topic: topic.topic, mode: topic.mode }, createdAt: at });
+      s.suggestions.delete(ticketId);
+      topic.record = { ...topic.record, drafts: topic.record.drafts + 1, usedAsIs: topic.record.usedAsIs + 1, sentByAutopilot: topic.record.sentByAutopilot + 1 };
+      pilot.examples[topic.topic] = [
+        { suggestionId: suggestion.id, ticket: { id: t.id, number: t.number, subject: t.subject }, outcome: "used", byAutopilot: true, at, sent: null, draft: sent.text },
+        ...(pilot.examples[topic.topic] ?? []),
+      ];
+      t.status = "waiting";
+      t.waitingSince = null;
+      t.lastMessageAt = at;
+      t.answered = true;
+      onChange();
+    }
+  };
+  for (const suggestion of s.suggestions.values()) {
+    if (suggestion.autopilot === "held" && suggestion.sendAt && typeof window !== "undefined") setTimeout(sendDue, Math.max(0, +new Date(suggestion.sendAt) - Date.now()) + 50);
+  }
+
   // The customer writes back a few seconds after your first reply, so you see the ticket reopen.
   const customerAnswers = (t: Ticket) => {
     if (t.answered) return;
@@ -677,6 +889,7 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
     },
 
     async getTicket(id) {
+      sendDue();
       const t = ticket(id);
       s.reads.set(id, new Date());
       const timeline: TicketDetail["timeline"] = [
@@ -884,6 +1097,75 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
 
       async setActionEnabled({ name, enabled }) {
         s.ai = { ...s.ai, actions: s.ai.actions?.map((action) => (action.name === name && action.approval === "never" ? { ...action, enabled } : action)) };
+        return delay({ ok: true });
+      },
+
+      async getAutopilot() {
+        sendDue();
+        const { examples: _, ...overview } = pilot;
+        return delay({ ...overview, topics: pilot.topics.map((topic) => ({ ...topic, record: { ...topic.record } })) });
+      },
+
+      async setAutopilotTopic({ topic: name, on, mode }) {
+        const topic = pilot.topics.find((x) => x.topic === name);
+        if (!topic) throw new Error("Choose one of your topics.");
+        if (!on) {
+          topic.pausedAt = null;
+          topic.pauseReason = null;
+          topic.stage = meets(topic) ? "eligible" : "collecting";
+        } else if (topic.stage === "on") {
+          topic.mode = mode ?? topic.mode;
+        } else {
+          const { good, drafts } = topic.record.recent;
+          if (!meets(topic)) {
+            throw new Error(`This topic isn't ready for Autopilot. It needs ${pilot.minDrafts} recent drafts with ${Math.round(pilot.minRate * 100)}% sent as drafted or lightly edited, and has ${good} of ${drafts}.`);
+          }
+          Object.assign(topic, { stage: "on", mode: mode ?? topic.mode ?? "hold", enabledBy: VIEWER, enabledAt: new Date(), pausedAt: null, pauseReason: null });
+        }
+        return delay({ ok: true });
+      },
+
+      async setAutopilot({ stopped, minDrafts, minRate }) {
+        if (stopped !== undefined) Object.assign(pilot, stopped ? { stopped: true, stoppedBy: VIEWER, stoppedAt: new Date() } : { stopped: false, stoppedBy: null, stoppedAt: null });
+        if (minDrafts !== undefined) pilot.minDrafts = Math.max(pilot.floor.minDrafts, minDrafts ?? 0);
+        if (minRate !== undefined) pilot.minRate = Math.max(pilot.floor.minRate, minRate ?? 0);
+        restage();
+        return delay({ ok: true });
+      },
+
+      async autopilotExamples({ topic, only }) {
+        const examples = pilot.examples[topic] ?? [];
+        return delay(only === "changed" ? examples.filter((example) => example.outcome !== "used" && example.outcome !== "light") : examples);
+      },
+
+      async holdAutopilotReply({ suggestionId }) {
+        for (const [ticketId, suggestion] of s.suggestions) {
+          if (suggestion.id === suggestionId) s.suggestions.set(ticketId, { ...suggestion, autopilot: "cancelled", autopilotBlock: "held_back", sendAt: null });
+        }
+        return delay({ ok: true });
+      },
+
+      async flagAutopilotReply({ suggestionId, note }) {
+        for (const t of s.tickets) {
+          const events = s.events.get(t.id)!;
+          const sent = events.find((e) => e.type === "autopilot_sent" && e.data.suggestionId === suggestionId);
+          if (!sent || events.some((e) => e.type === "autopilot_flagged" && e.data.suggestionId === suggestionId)) continue;
+          event(t.id, "autopilot_flagged", { messageId: sent.data.messageId, suggestionId, topic: sent.data.topic, note: note ?? null });
+          const topic = pilot.topics.find((x) => x.topic === sent.data.topic);
+          if (topic) {
+            const { record } = topic;
+            const good = Math.max(0, record.recent.good - 1);
+            topic.record = { ...record, usedAsIs: Math.max(0, record.usedAsIs - 1), flagged: record.flagged + 1, recent: { ...record.recent, good, rate: good / record.recent.drafts } };
+            if (topic.stage === "on") Object.assign(topic, { stage: "paused", pausedAt: new Date(), pauseReason: "flagged" });
+            topic.ready = meets(topic);
+            pilot.examples[topic.topic] = (pilot.examples[topic.topic] ?? []).map((example) => (example.suggestionId === suggestionId ? { ...example, outcome: "flagged" } : example));
+          }
+          if (t.status !== "open") {
+            event(t.id, "status_changed", { from: t.status, to: "open" });
+            t.status = "open";
+            t.waitingSince = new Date();
+          }
+        }
         return delay({ ok: true });
       },
 

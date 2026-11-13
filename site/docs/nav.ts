@@ -24,7 +24,7 @@ export const DOCS: DocGroup[] = [
   {
     title: "AI",
     pages: [
-      { title: "AI", href: "/docs/ai", description: "Optional: triage, suggested replies from your docs and a memory of what your team teaches it, with any AI SDK model." },
+      { title: "AI", href: "/docs/ai", description: "Optional: triage, suggested replies from your docs, a memory of what your team teaches it, and Autopilot for the topics that have earned it, with any AI SDK model." },
     ],
   },
   {

@@ -12,6 +12,7 @@ import { contactLabel, fillPlaceholders, formatBytes } from "./format";
 import { AnswerPicker, ApprovedAnswerDialog, answerOptionId, matchAnswers } from "./memory";
 import { DraftBar, RefineRow, foreignLanguage, type RefineAction } from "./ai";
 import { ProposedActions, undecidedActions } from "./actions";
+import { HeldReply, useAutopilotReason } from "./autopilot";
 import { VoiceButton, VoicePanel, useVoice, useVoiceEngine, type VoiceIntent } from "./voice";
 
 type Mode = "reply" | "note";
@@ -53,7 +54,10 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
   const ai = client.ai;
   const suggestion = ai && !blocked ? detail.suggestion ?? null : null;
   const [discarded, setDiscarded] = useState<string | null>(null);
-  const draft = suggestion?.kind === "draft" && suggestion.text && suggestion.id !== discarded ? suggestion : null;
+  // A reply Autopilot is holding isn't offered for the box: it goes out by itself unless the agent stops it.
+  const held = suggestion?.kind === "draft" && suggestion.autopilot === "held" ? suggestion : null;
+  const draft = suggestion?.kind === "draft" && suggestion.text && suggestion.id !== discarded && !held ? suggestion : null;
+  const leftToAgent = useAutopilotReason(draft);
   /** The suggestion the text in the box started from. */
   const [draftId, setDraftId] = useState<string | null>(null);
   const [history, setHistory] = useState<string[]>([]);
@@ -384,7 +388,9 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
               )}
             </div>
           )}
+          {mode === "reply" && held && <HeldReply ticketId={ticketId} suggestion={held} />}
           {mode === "reply" && draft && <DraftBar suggestion={draft} applied={applied} onUse={applyDraft} onDiscard={discardDraft} />}
+          {mode === "reply" && draft && leftToAgent && <p className="px-4 pt-1.5 text-xs text-muted-foreground">{leftToAgent}</p>}
           {mode === "reply" && draft?.actions && (
             <ProposedActions
               ticketId={ticketId}

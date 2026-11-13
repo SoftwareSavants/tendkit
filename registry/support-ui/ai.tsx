@@ -175,29 +175,36 @@ export function DraftBar({
           </button>
         </span>
       </div>
-      {applied && suggestion.sources.length > 0 && (
-        <ul className="flex flex-wrap items-center gap-1.5">
-          <li className="text-muted-foreground">{t("ai.sources")}</li>
-          {suggestion.sources.map((source) => {
-            const label = source.type === "guidance" ? t("ai.guidance") : source.title;
-            const chip = "inline-flex max-w-56 items-center rounded-md border bg-background px-1.5 py-0.5 text-foreground";
-            return (
-              <li key={source.id}>
-                {source.url ? (
-                  <a href={source.url} target="_blank" rel="noopener noreferrer" className={cn(chip, "underline-offset-2 hover:underline")}>
-                    <bdi className="truncate">{label}</bdi>
-                  </a>
-                ) : (
-                  <span className={chip} title={source.detail ?? undefined}>
-                    <bdi className="truncate">{label}</bdi>
-                  </span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      {applied && <SuggestionSources suggestion={suggestion} />}
     </div>
+  );
+}
+
+/** What a suggested reply is based on, each with its link when it has one. */
+export function SuggestionSources({ suggestion }: { suggestion: Suggestion }) {
+  const { t } = useSupport();
+  if (!suggestion.sources.length) return null;
+  return (
+    <ul className="flex flex-wrap items-center gap-1.5 text-xs">
+      <li className="text-muted-foreground">{t("ai.sources")}</li>
+      {suggestion.sources.map((source) => {
+        const label = source.type === "guidance" ? t("ai.guidance") : source.title;
+        const chip = "inline-flex max-w-56 items-center rounded-md border bg-background px-1.5 py-0.5 text-foreground";
+        return (
+          <li key={source.id}>
+            {source.url ? (
+              <a href={source.url} target="_blank" rel="noopener noreferrer" className={cn(chip, "underline-offset-2 hover:underline")}>
+                <bdi className="truncate">{label}</bdi>
+              </a>
+            ) : (
+              <span className={chip} title={source.detail ?? undefined}>
+                <bdi className="truncate">{label}</bdi>
+              </span>
+            )}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

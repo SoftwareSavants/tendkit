@@ -1,4 +1,19 @@
-import type { ActionRun, ApprovedAnswer, Gap, GuidanceSuggestion, ProposedAction, Suggestion, SuggestionSource, SuggestionStatus, TicketInsight, Urgency } from "./types";
+import type { OutcomeRow } from "./autopilot";
+import type {
+  ActionRun,
+  ApprovedAnswer,
+  AutopilotBlock,
+  AutopilotMode,
+  AutopilotState,
+  Gap,
+  GuidanceSuggestion,
+  ProposedAction,
+  Suggestion,
+  SuggestionSource,
+  SuggestionStatus,
+  TicketInsight,
+  Urgency,
+} from "./types";
 
 /**
  * Everything Copilot keeps. `postgres/ai-store.ts` and `d1/ai-store.ts` implement it; it's
@@ -39,7 +54,12 @@ export interface AiStore {
    * "discarded" when the agent answered without them.
    */
   closeSuggestions(ticketId: string, status: "stale" | "discarded", at: Date): Promise<void>;
-  decideSuggestion(id: string, patch: { status: SuggestionStatus; sentMessageId?: string | null; finalText?: string | null }, at: Date): Promise<void>;
+  /** `change` is `editWeight` of an edited draft. `autopilot: "sent"` marks a reply nobody read first. */
+  decideSuggestion(
+    id: string,
+    patch: { status: SuggestionStatus; sentMessageId?: string | null; finalText?: string | null; change?: number | null; autopilot?: AutopilotState | null },
+    at: Date
+  ): Promise<void>;
 
   /* Memory: what the team teaches Copilot while answering. Tables are in `0002_memory.sql`. */
 
@@ -71,8 +91,8 @@ export interface AiStore {
 
   /**
    * Questions that went without a usable draft from `after` (included) until `until` (not
-   * included): suggestions that said "cannot answer", by when they were made, and drafts an agent
-   * discarded, by when. Oldest first.
+   * included): suggestions that said "cannot answer", by when they were made, drafts an agent
+   * discarded, by when, and replies Autopilot sent that an agent flagged as wrong, by when. Oldest first.
    */
   listUnanswered(input: { after: Date; until: Date; limit: number }): Promise<UnansweredRow[]>;
   /** With how many tickets asked, when last, and the latest three. Most asked first. */
@@ -103,7 +123,51 @@ export interface AiStore {
   linkActionRuns(ids: string[], suggestionId: string): Promise<void>;
   /** A suggestion's runs, or a ticket's. Newest first. */
   listActionRuns(input: { suggestionId: string } | { ticketId: string; limit: number }): Promise<ActionRun[]>;
+
+  /* Autopilot: which topics answer on their own, and the evidence. The table and columns are in `0004_autopilot.sql`. */
+
+  /** Every topic someone switched on at some point, whatever its status now. */
+  listAutopilotTopics(): Promise<AutopilotTopic[]>;
+  saveAutopilotTopic(topic: AutopilotTopic): Promise<void>;
+  /** Pauses a topic that is on. Returns false when it wasn't on: someone else got there first. */
+  pauseAutopilotTopic(topic: string, reason: NonNullable<AutopilotTopic["pauseReason"]>, at: Date): Promise<boolean>;
+  /** Suggestions made since `since`, newest first: what a track record is computed from. No texts. */
+  listOutcomes(input: { since: Date; topic?: string; limit: number }): Promise<OutcomeRow[]>;
+  /**
+   * Takes a held reply, once, in one conditional update: false when it's no longer held or no
+   * longer pending. Whoever gets true decides what happens to it (the scheduler sends it, an agent
+   * stops it or answers instead); everyone else must leave it alone. `at` is kept as `sendAt`, so a
+   * claim that never finished can be told from one in progress.
+   */
+  claimHeldSuggestion(id: string, at: Date): Promise<boolean>;
+  /** Moves a pending suggestion's Autopilot state. Does nothing once the suggestion is decided. */
+  setSuggestionAutopilot(id: string, patch: { autopilot: AutopilotState | null; autopilotBlock?: AutopilotBlock | null; sendAt?: Date | null }): Promise<void>;
+  /** Held replies whose time has come, oldest first. */
+  listHeldSuggestions(input: { dueBefore: Date; limit: number }): Promise<Suggestion[]>;
+  /** Replies Autopilot sent since `since`, for the hourly cap. */
+  countAutopilotSent(since: Date): Promise<number>;
+  /** The suggestion a sent message came from. */
+  suggestionForMessage(messageId: string): Promise<SuggestionRow | null>;
+  /** What the customer did after a suggested reply was sent. "unhappy" is never overwritten by "reopened". */
+  setFollowUp(id: string, followUp: "unhappy" | "reopened"): Promise<void>;
+  /** Marks a reply Autopilot sent as wrong. Returns false when it already was, or wasn't Autopilot's. */
+  flagSuggestion(id: string, input: { by: string; note: string | null }, at: Date): Promise<boolean>;
+  /** A person looked at a topic's flagged replies: they no longer hold the topic back. */
+  reviewFlags(topic: string, at: Date): Promise<void>;
 }
+
+/** A topic's Autopilot switch, and who set it. */
+export type AutopilotTopic = {
+  topic: string;
+  mode: AutopilotMode;
+  status: "on" | "paused" | "off";
+  /** Who last switched it on, and when. */
+  enabledBy: string | null;
+  enabledAt: Date | null;
+  pausedAt: Date | null;
+  /** "quality": its track record fell under the threshold. "flagged": an agent marked a sent reply as wrong. */
+  pauseReason: "quality" | "flagged" | null;
+};
 
 export type AiSettings = {
   /** How your team answers: tone, policies, what never to promise. Goes into every prompt. */
@@ -120,6 +184,12 @@ export type AiSettings = {
   memoryCursor: Date | null;
   /** Lookups ("never" approval) the team switched off: Copilot doesn't run them while drafting. */
   disabledActions: string[];
+  /** The kill switch: set while Autopilot is stopped for every topic. */
+  autopilotStoppedAt: Date | null;
+  autopilotStoppedBy: string | null;
+  /** The team's own thresholds, when stricter than the ones in code. */
+  autopilotMinDrafts: number | null;
+  autopilotMinRate: number | null;
 };
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
@@ -130,6 +200,10 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
   memoryRunAt: null,
   memoryCursor: null,
   disabledActions: [],
+  autopilotStoppedAt: null,
+  autopilotStoppedBy: null,
+  autopilotMinDrafts: null,
+  autopilotMinRate: null,
 };
 
 export type KnowledgeRow = {
@@ -149,12 +223,15 @@ export type InsightRow = TicketInsight & {
   pendingMessageId: string | null;
   attempts: number;
   lastError: string | null;
+  /** From the customer's latest message: they ask for a person, or say the last reply didn't help. */
+  asksForHuman: boolean;
+  notHelped: boolean;
 };
 
 export type InsightPatch = Partial<
   Pick<
     InsightRow,
-    "basedOnMessageId" | "topic" | "urgency" | "urgencyReason" | "mood" | "language" | "summary" | "topicSetBy" | "urgencySetBy"
+    "basedOnMessageId" | "topic" | "urgency" | "urgencyReason" | "mood" | "language" | "summary" | "topicSetBy" | "urgencySetBy" | "asksForHuman" | "notHelped"
   >
 >;
 
@@ -165,6 +242,11 @@ export type SuggestionRow = Suggestion & {
   sentMessageId: string | null;
   finalText: string | null;
   decidedAt: Date | null;
+  change: number | null;
+  followUp: "unhappy" | "reopened" | null;
+  flaggedAt: Date | null;
+  flaggedBy: string | null;
+  flagNote: string | null;
 };
 
 export type NewSuggestion = {
@@ -178,6 +260,11 @@ export type NewSuggestion = {
   modelId: string | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  topic?: string | null;
+  language?: string | null;
+  autopilot?: AutopilotState | null;
+  sendAt?: Date | null;
+  autopilotBlock?: AutopilotBlock | null;
   createdAt: Date;
 };
 

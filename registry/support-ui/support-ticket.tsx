@@ -27,6 +27,7 @@ import { ChangeContactDialog } from "./change-contact-dialog";
 import { TicketInsightBar, foreignLanguage, languageName, useMessageTranslation } from "./ai";
 import { ApprovedAnswerDialog, ArticleDialog } from "./memory";
 import { RunActionDialog } from "./actions";
+import { AutopilotMark, autopilotMark } from "./autopilot";
 
 /** One ticket: the conversation, the reply box, and the customer next to it. */
 export function SupportTicket({ ticketId }: { ticketId: string }) {
@@ -252,9 +253,14 @@ function Timeline({ detail, agents }: { detail: TicketDetail; agents: Agent[] })
     );
   };
 
+  // Autopilot's send is marked on the reply itself. A flag raised by a client that no longer shows there still gets its line.
+  const onItsMessage = (event: TimelineEvent) =>
+    (event.type === "autopilot_sent" || event.type === "autopilot_flagged") &&
+    detail.timeline.some((e) => e.type === "message" && e.message.id === event.data.messageId);
+
   return (
     <ol className="space-y-3">
-      {detail.timeline.filter((entry) => entry.type === "message" || !impliedByReply(entry.event)).map((entry) =>
+      {detail.timeline.filter((entry) => entry.type === "message" || !(impliedByReply(entry.event) || onItsMessage(entry.event))).map((entry) =>
         entry.type === "message" ? (
           <li key={entry.message.id}>
             <MessageCard message={entry.message} detail={detail} agents={agents} agentName={agentName} />
@@ -301,6 +307,10 @@ function describeEvent(event: TimelineEvent, t: ReturnType<typeof useSupport>["t
       const said = t(status === "succeeded" ? "ticket.events.actionRan" : status === "failed" ? "ticket.events.actionFailed" : "ticket.events.actionUnconfirmed", { actor, title });
       return summary ? `${said}: ${summary}` : said;
     }
+    case "autopilot_sent":
+      return t("ai.autopilot.sentBy", { topic: String(event.data.topic ?? "") });
+    case "autopilot_flagged":
+      return t("ticket.events.autopilotFlagged", { actor });
     case "forwarded": {
       const from = event.data.from as { address: string; name?: string | null } | undefined;
       return t("ticket.events.forwarded", { actor: agentName(event.actorId) ?? from?.name ?? from?.address ?? actor });
@@ -331,10 +341,14 @@ function MessageCard({
     return <p className="px-2 py-1 text-center text-xs text-muted-foreground">{t("ticket.autoReplySent")} · {formatWhen(message.createdAt, locale)}</p>;
   }
 
+  // A reply nobody read first says so, to agents only: the customer sees a reply from the team.
+  const autopilot = client.ai ? autopilotMark(detail, message) : null;
   const author =
     message.kind === "inbound"
       ? message.from?.name || message.from?.address || contactLabel(detail.contact)
-      : agentName(message.authorId) ?? message.from?.name ?? t("ticket.formerAgent");
+      : autopilot
+        ? t("ai.autopilot.name")
+        : agentName(message.authorId) ?? message.from?.name ?? t("ticket.formerAgent");
   // Initials come from the real name even when the label says "You".
   const avatarName =
     message.kind === "inbound" ? author : agents.find((a) => a.id === message.authorId)?.name ?? author;
@@ -347,7 +361,7 @@ function MessageCard({
   // Offered only when the customer writes in another language than the agent reads.
   const foreign = client.ai && message.kind === "inbound" ? foreignLanguage(detail, locale) : null;
   // A reply that reached the customer can become an answer the whole team reuses.
-  const reusable = Boolean(client.ai?.saveApprovedAnswer) && message.kind === "outbound" && !failed && message.text.trim().length > 0;
+  const reusable = Boolean(client.ai?.saveApprovedAnswer) && message.kind === "outbound" && !failed && message.text.trim().length > 0 && !autopilot?.flagged;
 
   return (
     <article
@@ -386,8 +400,9 @@ function MessageCard({
         </div>
       )}
 
-      {(hasMore || failed || foreign || reusable) && (
+      {(hasMore || failed || foreign || reusable || autopilot) && (
         <footer className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+          {autopilot && <AutopilotMark detail={detail} sent={autopilot.sent} flagged={autopilot.flagged} agentName={agentName} />}
           {reusable && (
             <>
               <button type="button" className="text-muted-foreground underline underline-offset-2 hover:text-foreground" onClick={() => setSaving(true)}>
