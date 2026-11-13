@@ -68,7 +68,10 @@
       "contactChanged": "{actor} changed the contact to {address}",
       "forwarded": "Forwarded by {actor}",
       "urgencyChanged": "{actor} set the urgency to {urgency}",
-      "topicChanged": "{actor} set the topic to {topic}"
+      "topicChanged": "{actor} set the topic to {topic}",
+      "actionRan": "{actor} ran {title}",
+      "actionFailed": "{actor} ran {title}, and it didn't go through",
+      "actionUnconfirmed": "{actor} ran {title}, and it didn't confirm"
     },
     "account": "Account"
   },
@@ -233,6 +236,31 @@
       "lastSeen": "last asked {when}",
       "write": "Write an answer",
       "dismiss": "Dismiss"
+    },
+    "actions": {
+      "approve": "Approve",
+      "skip": "Skip",
+      "skipped": "Skipped",
+      "done": "Done",
+      "run": "Run",
+      "close": "Close",
+      "runFor": "Runs for {customer}.",
+      "invalidField": "Enter a valid value for {field}.",
+      "unapproved": "This reply may say something was done that hasn't been approved: {titles}.",
+      "review": "Go back",
+      "sendAnyway": "Send anyway",
+      "heading": "Actions",
+      "help": "What AI can do in your product, set up in your code. It runs for the customer on the ticket and no one else.",
+      "needsApproval": "Proposed with the suggested reply. Runs when an agent approves it.",
+      "runsAlone": "Read-only. Runs on its own while a reply is drafted.",
+      "runsByHand": "Read-only. Runs only when an agent runs it.",
+      "errors": {
+        "failed": "{title} didn't go through.",
+        "failedWith": "{title} didn't go through: {summary}",
+        "timedOut": "{title} took too long to confirm, so it may or may not have gone through. Check the customer's account before you try again.",
+        "errored": "{title} stopped before it could confirm. Check the customer's account before you try again.",
+        "request": "Couldn't run this. Check your connection and try again."
+      }
     }
   },
   "contact": {

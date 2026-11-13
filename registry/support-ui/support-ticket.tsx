@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, ArrowLeft, Ban, FileText, Link2, MoreHorizontal, RotateCw, UserPen } from "lucide-react";
+import { AlertCircle, ArrowLeft, Ban, FileText, Link2, MoreHorizontal, RotateCw, UserPen, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { buttonVariants } from "@/components/ui/button";
 import { useSupport } from "./provider";
-import type { Agent, TicketDetail, TicketStatus, TimelineEvent, TimelineMessage } from "./client";
+import type { Agent, TicketAction, TicketDetail, TicketStatus, TimelineEvent, TimelineMessage } from "./client";
 import { contactLabel, formatTimestamp, formatWhen } from "./format";
 import { AgentAvatar, AttachmentChip, EmailFrame, MessageText, StatusBadge, UnknownSenderBadge } from "./parts";
 import { SupportComposer } from "./support-composer";
@@ -26,6 +26,7 @@ import { LinkCustomerDialog } from "./link-customer-dialog";
 import { ChangeContactDialog } from "./change-contact-dialog";
 import { TicketInsightBar, foreignLanguage, languageName, useMessageTranslation } from "./ai";
 import { ApprovedAnswerDialog, ArticleDialog } from "./memory";
+import { RunActionDialog } from "./actions";
 
 /** One ticket: the conversation, the reply box, and the customer next to it. */
 export function SupportTicket({ ticketId }: { ticketId: string }) {
@@ -111,6 +112,15 @@ function TicketControls({ detail, agents }: { detail: TicketDetail; agents: Agen
   const [linking, setLinking] = useState(false);
   const [changingContact, setChangingContact] = useState(false);
   const [draftingArticle, setDraftingArticle] = useState(false);
+  // What your product can do for this ticket's customer, when the client lists it.
+  const canRun = Boolean(client.ai?.listActions && client.ai.runAction && detail.customer && detail.ticket.status !== "spam");
+  const actions = useQuery({
+    queryKey: ["support", "ai", "actions", id, detail.ticket.customerId],
+    queryFn: () => client.ai!.listActions!({ ticketId: id }),
+    enabled: canRun,
+    staleTime: 60_000,
+  });
+  const [running, setRunning] = useState<TicketAction | null>(null);
   // Controlled, so picking an option closes the menu with Radix and Base UI alike.
   const [statusOpen, setStatusOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
@@ -189,6 +199,18 @@ function TicketControls({ detail, agents }: { detail: TicketDetail; agents: Agen
               {t("ai.article.draft")}
             </DropdownMenuItem>
           )}
+          {canRun && Boolean(actions.data?.length) && (
+            <>
+              <DropdownMenuSeparator />
+              {actions.data!.map((action) => (
+                <DropdownMenuItem key={action.name} onClick={() => setRunning(action)}>
+                  <Zap className="size-4" />
+                  {action.title}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+            </>
+          )}
           {detail.ticket.status === "spam" ? (
             <DropdownMenuItem onClick={() => setStatus.mutate("open")}>
               <RotateCw className="size-4" />
@@ -205,6 +227,7 @@ function TicketControls({ detail, agents }: { detail: TicketDetail; agents: Agen
       <LinkCustomerDialog detail={detail} open={linking} onOpenChange={setLinking} />
       <ChangeContactDialog detail={detail} open={changingContact} onOpenChange={setChangingContact} />
       <ArticleDialog open={draftingArticle} onOpenChange={setDraftingArticle} from={{ ticketIds: [detail.ticket.id] }} />
+      <RunActionDialog detail={detail} action={running} onClose={() => setRunning(null)} />
     </div>
   );
 }
@@ -270,6 +293,13 @@ function describeEvent(event: TimelineEvent, t: ReturnType<typeof useSupport>["t
       const topic = (event.data.topic as { to?: string } | undefined)?.to;
       if (urgency) return t("ticket.events.urgencyChanged", { actor, urgency: t(`ai.urgency.${urgency}`) });
       return t("ticket.events.topicChanged", { actor, topic: !topic || topic === "other" ? t("ai.otherTopic") : topic });
+    }
+    case "action_run": {
+      const title = String(event.data.title ?? "");
+      const status = event.data.status;
+      const summary = typeof event.data.summary === "string" ? event.data.summary : "";
+      const said = t(status === "succeeded" ? "ticket.events.actionRan" : status === "failed" ? "ticket.events.actionFailed" : "ticket.events.actionUnconfirmed", { actor, title });
+      return summary ? `${said}: ${summary}` : said;
     }
     case "forwarded": {
       const from = event.data.from as { address: string; name?: string | null } | undefined;

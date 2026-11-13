@@ -4,7 +4,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "test": "vitest run && TENDKIT_STORE=d1 vitest run tests/service.test.ts tests/team.test.ts tests/ai.test.ts tests/memory.test.ts",
+    "test": "vitest run && TENDKIT_STORE=d1 vitest run tests/service.test.ts tests/team.test.ts tests/ai.test.ts tests/memory.test.ts tests/actions.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.check.json && tsc --noEmit -p tsconfig.server.json",
     "registry:build": "shadcn build",
     "dev": "next dev",
@@ -38,7 +38,8 @@
     "tw-animate-css": "^1.4.0",
     "typescript": "^5.9.2",
     "vitest": "^5.1.0",
-    "wrangler": "^4.158.0"
+    "wrangler": "^4.158.0",
+    "zod": "^4.1.8"
   },
   "packageManager": "pnpm@10.0.0",
   "dependencies": {

@@ -1,4 +1,6 @@
 import type {
+  ActionField,
+  ActionRun,
   Agent,
   AiSettings,
   ApprovedAnswer,
@@ -8,6 +10,7 @@ import type {
   GuidanceSuggestion,
   PortalMessage,
   PortalTicket,
+  ProposedAction,
   Suggestion,
   SupportClient,
   SupportPortalClient,
@@ -29,6 +32,7 @@ import type {
  * the demo works without a model or a key. In your app they come from the model you configure.
  * So is its memory: the approved answers, the rule suggested from edits and the unanswered
  * questions are seeded here, and "generalising" a reply swaps the names it knows for placeholders.
+ * And its actions: three stand-ins for what an app would declare, with results written here.
  */
 
 export const VIEWER: Agent = { id: "agent_you", name: "Alex Chen" };
@@ -41,6 +45,73 @@ export const ACCOUNTS: DemoAccount[] = [
   { id: "acc_sol", name: "Clínica Sol", plan: "Starter", seats: 2, since: "Aug 2026", lastOrder: "#0291 · $49.00" },
   { id: "acc_rossi", name: "Rossi Studio", plan: "Growth", seats: 6, since: "Jan 2026", lastOrder: "#3310 · $312.50" },
   { id: "acc_nordvik", name: "Nordvik", plan: "Business", seats: 25, since: "Jun 2025", lastOrder: "#5521 · $2,016.00" },
+  { id: "acc_harbor", name: "Harbor Books", plan: "Trial", seats: 3, since: "Nov 2026", lastOrder: "None yet" },
+];
+
+/** What an app would declare in `supportAi({ actions })`: here each result is scripted. */
+type DemoAction = {
+  name: string;
+  title: string;
+  description: string;
+  approval: "always" | "never";
+  fields: ActionField[];
+  run(input: Record<string, unknown>, account: DemoAccount): Omit<ActionRun, "id">;
+  /** The reply with the sentence that says this was done taken out, for when an agent skips it. */
+  without?(text: string): string;
+  /** The reply saying what was done instead, for when an agent changed the inputs. */
+  rewritten?(text: string, input: Record<string, unknown>): string;
+};
+const dropSentence = (text: string, about: RegExp) =>
+  text
+    .split("\n\n")
+    .map((paragraph) => paragraph.split(/(?<=[.!?])\s+/).filter((sentence) => !about.test(sentence)).join(" ").trim())
+    .filter(Boolean)
+    .join("\n\n");
+const DEMO_ACTIONS: DemoAction[] = [
+  {
+    name: "last_invoice",
+    title: "Look up last invoice",
+    description: "The customer's most recent invoice and whether it's paid.",
+    approval: "never",
+    fields: [],
+    run(_, account) {
+      const [number, amount] = account.lastOrder.split(" · ");
+      return amount
+        ? { status: "succeeded", summary: `Invoice ${number} for ${amount}, paid.`, data: { Invoice: number!, Amount: amount, Status: "Paid" } }
+        : { status: "succeeded", summary: "No invoices yet. The first one is created when the trial ends.", data: null };
+    },
+  },
+  {
+    name: "resend_verification",
+    title: "Resend verification email",
+    description: "Sends the account's verification email again.",
+    approval: "always",
+    fields: [{ name: "email", label: "Email", description: "Where to send it", kind: "text", required: true }],
+    run(input) {
+      const email = String(input.email ?? "");
+      return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
+        ? { status: "succeeded", summary: `Verification email sent to ${email}.`, data: null }
+        : { status: "failed", summary: `${email || "That"} isn't a valid email address.`, data: null };
+    },
+    without: (text) => dropSentence(text, /verification email/i),
+    rewritten: (text, input) => text.replace(/(verification email again to )\S+@\S+?(?=[,.\s])/i, `$1${String(input.email)}`),
+  },
+  {
+    name: "extend_trial",
+    title: "Extend trial",
+    description: "Extends the customer's trial. Use when they need more time to evaluate.",
+    approval: "always",
+    fields: [{ name: "days", label: "Days", description: "Days to add, up to 30", kind: "number", required: true }],
+    run(input, account) {
+      const days = Number(input.days);
+      if (account.plan !== "Trial") return { status: "failed", summary: `${account.name} isn't on a trial.`, data: null };
+      if (!Number.isInteger(days) || days < 1 || days > 30) return { status: "failed", summary: "A trial can be extended by 1 to 30 days.", data: null };
+      const until = new Date(Date.now() + (days + 1) * 86_400_000).toLocaleDateString("en", { month: "short", day: "numeric" });
+      return { status: "succeeded", summary: `Trial extended by ${days} days, to ${until}.`, data: null };
+    },
+    without: (text) => dropSentence(text, /extended your trial/i),
+    rewritten: (text, input) => text.replace(/(extended your trial by )\d+ days/i, `$1${Number(input.days)} days`),
+  },
 ];
 
 type ChannelKind = "email" | "sms" | "whatsapp";
@@ -79,6 +150,12 @@ type State = {
 };
 
 const minutes = (n: number) => new Date(Date.now() - n * 60_000);
+
+/** An action proposed with a scripted suggestion. */
+function proposal(name: string, input: Record<string, unknown>, reason: string): ProposedAction {
+  const action = DEMO_ACTIONS.find((a) => a.name === name)!;
+  return { name, title: action.title, input, reason, state: "proposed", fields: action.fields, run: null };
+}
 let ids = 0;
 const nextId = (prefix: string) => `${prefix}_${++ids}`;
 
@@ -115,6 +192,7 @@ function seed(): State {
         { id: "help-center", articles: 42, syncedAt: minutes(190) },
         { id: "developer-docs", articles: 118, syncedAt: minutes(190) },
       ],
+      actions: DEMO_ACTIONS.map(({ name, title, description, approval }) => ({ name, title, description, approval, enabled: true })),
     },
     answers: [
       {
@@ -349,6 +427,40 @@ function seed(): State {
     status: "spam",
     read: true,
     thread: [{ kind: "inbound", ago: 2000, text: "Buy 3 watches, get 1 free. Limited time!" }],
+  });
+
+  // Added last, so the ids of the tickets above stay what links to the demo expect.
+  add({
+    channel: "email",
+    name: "Mateo Alvarez",
+    identity: "mateo@harborbooks.test",
+    account: "acc_harbor",
+    subject: "Trial ends tomorrow and we still can't verify",
+    status: "open",
+    thread: [
+      {
+        kind: "inbound",
+        ago: 9,
+        text: "Hi, our trial ends tomorrow and we haven't been able to test properly: the verification email never arrived, so imports are still locked.\n\nCould you send it again and give us a bit more time? And have we been charged for anything yet?\n\nMateo",
+      },
+    ],
+    ai: {
+      insight: { topic: "Account access", urgency: "high", urgencyReason: "Their trial ends tomorrow", mood: "frustrated", language: "en", summary: "Needs the verification email again and more time on the trial" },
+      suggestion: {
+        kind: "draft",
+        text: "Hi Mateo,\n\nSorry about the missing email. I've sent the verification email again to mateo@harborbooks.test, and it should arrive within a few minutes.\n\nI've also extended your trial by 14 days, so you have time to test imports properly. You haven't been charged for anything: your first invoice is only created when the trial ends.",
+        reason: null,
+        sources: [
+          { type: "action", id: "action/run_seed", title: "Look up last invoice", detail: "No invoices yet. The first one is created when the trial ends." },
+          { type: "fact", id: "fact:1", title: "Plan" },
+          { type: "guidance", id: "guidance", title: "Team guidance" },
+        ],
+        actions: [
+          proposal("resend_verification", { email: "mateo@harborbooks.test" }, "The verification email never reached them."),
+          proposal("extend_trial", { days: 14 }, "Their trial ends tomorrow and they couldn't test without verifying."),
+        ],
+      },
+    },
   });
 
   // What the team's work has taught so far, pointing at the tickets above.
@@ -738,6 +850,41 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
         });
         if (last && !s.insights.has(ticketId)) s.insights.set(ticketId, scriptedInsight(last.text));
         return thinking({ ok: true });
+      },
+
+      async listActions({ ticketId }) {
+        const t = ticket(ticketId);
+        if (!t.customerId) return delay([]);
+        return delay(DEMO_ACTIONS.map(({ name, title, description, approval, fields }) => ({ name, title, description, approval, fields })));
+      },
+
+      async runAction({ ticketId, action: name, input, suggestionId, text }) {
+        const t = ticket(ticketId);
+        const action = DEMO_ACTIONS.find((a) => a.name === name);
+        const account = ACCOUNTS.find((a) => a.id === t.customerId);
+        if (!action || !account) throw new Error("This action isn't available for this ticket.");
+        const run: ActionRun = { id: nextId("run"), ...action.run(input, account) };
+        event(ticketId, "action_run", { runId: run.id, action: name, title: action.title, status: run.status, summary: run.summary, input });
+        const suggestion = s.suggestions.get(ticketId);
+        const proposed = suggestionId && suggestion?.id === suggestionId ? suggestion.actions?.find((a) => a.name === name) : undefined;
+        if (!proposed) return thinking({ run });
+        const edited = JSON.stringify(proposed.input) !== JSON.stringify(input);
+        const state = run.status === "succeeded" ? ("done" as const) : ("failed" as const);
+        s.suggestions.set(ticketId, { ...suggestion!, actions: suggestion!.actions!.map((a) => (a.name === name ? { ...a, input, run, state } : a)) });
+        return thinking({ run, text: edited && run.status === "succeeded" && text ? action.rewritten?.(text, input) ?? null : null });
+      },
+
+      async declineAction({ ticketId, suggestionId, action: name, text }) {
+        const suggestion = s.suggestions.get(ticketId);
+        const proposed = suggestion?.id === suggestionId ? suggestion.actions?.find((a) => a.name === name) : undefined;
+        if (!proposed) throw new Error("This suggestion is no longer current. Reload the ticket.");
+        s.suggestions.set(ticketId, { ...suggestion!, actions: suggestion!.actions!.map((a) => (a.name === name ? { ...a, state: "declined" as const } : a)) });
+        return thinking({ text: text ? DEMO_ACTIONS.find((a) => a.name === name)?.without?.(text) ?? null : null });
+      },
+
+      async setActionEnabled({ name, enabled }) {
+        s.ai = { ...s.ai, actions: s.ai.actions?.map((action) => (action.name === name && action.approval === "never" ? { ...action, enabled } : action)) };
+        return delay({ ok: true });
       },
 
       async discardSuggestion({ id }) {

@@ -1,4 +1,4 @@
-import type { ApprovedAnswer, Gap, GuidanceSuggestion, Suggestion, SuggestionSource, SuggestionStatus, TicketInsight, Urgency } from "./types";
+import type { ActionRun, ApprovedAnswer, Gap, GuidanceSuggestion, ProposedAction, Suggestion, SuggestionSource, SuggestionStatus, TicketInsight, Urgency } from "./types";
 
 /**
  * Everything Copilot keeps. `postgres/ai-store.ts` and `d1/ai-store.ts` implement it; it's
@@ -84,6 +84,25 @@ export interface AiStore {
   /** The tickets of a gap, latest first. */
   gapTicketIds(gapId: string, limit: number): Promise<string[]>;
   setGapStatus(id: string, status: Gap["status"], decidedBy: string | null, at: Date): Promise<void>;
+
+  /* Actions: every run, and what a suggestion proposed. The table and columns are in `0003_actions.sql`. */
+
+  /** Replaces a suggestion's proposed actions: an agent skipped one, or changed its inputs before approving. */
+  setSuggestionActions(id: string, actions: ProposedAction[]): Promise<void>;
+  /**
+   * Starts the log entry of a run, as "running". Returns null when a run with the same
+   * `idempotencyKey` exists: someone else started it first.
+   */
+  insertActionRun(input: NewActionRun): Promise<ActionRun | null>;
+  finishActionRun(
+    id: string,
+    patch: Pick<ActionRun, "status" | "summary" | "data" | "durationMs"> & { error: string | null },
+    at: Date
+  ): Promise<void>;
+  /** Lookups ran before their suggestion was stored: this ties them to it. */
+  linkActionRuns(ids: string[], suggestionId: string): Promise<void>;
+  /** A suggestion's runs, or a ticket's. Newest first. */
+  listActionRuns(input: { suggestionId: string } | { ticketId: string; limit: number }): Promise<ActionRun[]>;
 }
 
 export type AiSettings = {
@@ -99,6 +118,8 @@ export type AiSettings = {
   memoryRunAt: Date | null;
   /** Unanswered questions up to here are filed under gaps. */
   memoryCursor: Date | null;
+  /** Lookups ("never" approval) the team switched off: Copilot doesn't run them while drafting. */
+  disabledActions: string[];
 };
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
@@ -108,6 +129,7 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
   knowledgeSyncedAt: null,
   memoryRunAt: null,
   memoryCursor: null,
+  disabledActions: [],
 };
 
 export type KnowledgeRow = {
@@ -152,10 +174,16 @@ export type NewSuggestion = {
   text: string | null;
   reason: string | null;
   sources: SuggestionSource[];
+  actions: ProposedAction[];
   modelId: string | null;
   inputTokens: number | null;
   outputTokens: number | null;
   createdAt: Date;
+};
+
+export type NewActionRun = Pick<ActionRun, "ticketId" | "suggestionId" | "action" | "title" | "input" | "trigger" | "approvedBy" | "createdAt"> & {
+  /** Set for approved proposals, so one approval runs once however many times it's sent. */
+  idempotencyKey: string | null;
 };
 
 /** A draft an agent changed before sending: how the team actually answers. */

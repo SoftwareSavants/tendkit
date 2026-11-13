@@ -28,7 +28,50 @@ export type TicketInsight = {
   summary: string | null;
 };
 
-export type SuggestionSource = { type: "knowledge" | "answer" | "fact" | "guidance"; id: string; title: string; url?: string | null };
+export type SuggestionSource = {
+  type: "knowledge" | "answer" | "fact" | "guidance" | "action";
+  id: string;
+  title: string;
+  url?: string | null;
+  /** For "action": what the lookup found. */
+  detail?: string | null;
+};
+
+/** One input of an action, as a form field. */
+export type ActionField = {
+  name: string;
+  label: string;
+  description: string | null;
+  kind: "text" | "number" | "boolean" | "select" | "date" | "json";
+  required: boolean;
+  options?: string[];
+};
+
+/** How a run ended. "timed_out" and "errored" mean your product didn't answer: it may or may not have happened. */
+export type ActionRun = {
+  id: string;
+  status: "running" | "succeeded" | "failed" | "timed_out" | "errored";
+  /** What your product said happened. */
+  summary: string | null;
+  data?: Record<string, unknown> | null;
+};
+
+/** A change the suggested reply assumes, waiting for the agent to approve or skip it. */
+export type ProposedAction = {
+  name: string;
+  title: string;
+  input: Record<string, unknown>;
+  reason: string;
+  state: "proposed" | "running" | "done" | "failed" | "declined";
+  fields: ActionField[];
+  run: ActionRun | null;
+};
+
+/** An action an agent can run from the ticket's menu. */
+export type TicketAction = { name: string; title: string; description: string; approval: "always" | "never"; fields: ActionField[] };
+
+/** A declared action on the settings screen. Only "never" actions can be switched off. */
+export type ActionSetting = { name: string; title: string; description: string; approval: "always" | "never"; enabled: boolean };
 
 /** A suggested reply, or why there isn't one. */
 export type Suggestion = {
@@ -37,6 +80,7 @@ export type Suggestion = {
   text: string | null;
   reason: string | null;
   sources: SuggestionSource[];
+  actions?: ProposedAction[];
 };
 
 export type TicketListItem = {
@@ -81,7 +125,17 @@ export type TimelineMessage = {
 
 export type TimelineEvent = {
   id: string;
-  type: "created" | "assigned" | "status_changed" | "customer_linked" | "reopened" | "follow_up" | "contact_changed" | "forwarded" | "insight_changed";
+  type:
+    | "created"
+    | "assigned"
+    | "status_changed"
+    | "customer_linked"
+    | "reopened"
+    | "follow_up"
+    | "contact_changed"
+    | "forwarded"
+    | "insight_changed"
+    | "action_run";
   actorId: string | null;
   data: Record<string, unknown>;
   createdAt: DateLike;
@@ -138,6 +192,8 @@ export type AiSettings = {
   draftOnArrival: boolean;
   /** Your knowledge sources, from `ai.listKnowledgeSources()`. */
   sources: { id: string; articles: number; syncedAt: DateLike | null }[];
+  /** Your declared actions, from `ai.listActions()`. Leave it out when you have none. */
+  actions?: ActionSetting[];
 };
 
 /** An answer the team approved for reuse. Its text may hold {name}, {company} and {agent}, filled in when it's inserted. */
@@ -199,6 +255,23 @@ export interface SupportAiClient {
   dismissGap?(input: { id: string }): Promise<unknown>;
   /** A Markdown help article written from how agents answered a gap's tickets, or the tickets given. */
   draftArticle?(input: { gapId: string } | { ticketIds: string[] }): Promise<{ title: string; markdown: string }>;
+
+  /*
+   * Actions. Optional like memory: with `runAction`, proposed actions show under the suggested
+   * reply; add `listActions` for the ticket's menu and `setActionEnabled` for the settings switch.
+   */
+  /** `support.ai.ticketActions`: what an agent can run on this ticket. */
+  listActions?(input: { ticketId: string }): Promise<TicketAction[]>;
+  /**
+   * `support.ai.runAction`, with your signed-in agent's id as `actorId` on the server: that is the
+   * approval. `suggestionId` when it was proposed; `text` is the reply box, returned rewritten when
+   * the agent changed the inputs.
+   */
+  runAction?(input: { ticketId: string; action: string; input: Record<string, unknown>; suggestionId?: string; text?: string }): Promise<{ run: ActionRun; text?: string | null }>;
+  /** `support.ai.declineAction`: skips a proposed action. Returns the reply rewritten without it. */
+  declineAction?(input: { ticketId: string; suggestionId: string; action: string; text?: string }): Promise<{ text?: string | null }>;
+  /** `support.ai.setActionEnabled`: stops, or lets, AI run a lookup on its own. */
+  setActionEnabled?(input: { name: string; enabled: boolean }): Promise<unknown>;
 }
 
 export interface SupportClient {

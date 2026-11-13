@@ -1,8 +1,9 @@
 import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, max, notInArray, or, sql } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { DEFAULT_AI_SETTINGS, URGENCY_RANK, type AiSettings, type AiStore, type ExampleRow, type InsightRow, type SuggestionRow } from "../ai-store";
-import type { ApprovedAnswer, Gap, GuidanceSuggestion, Mood, Suggestion, SuggestionStatus, Urgency } from "../types";
+import type { ActionRun, ApprovedAnswer, Gap, GuidanceSuggestion, Mood, Suggestion, SuggestionStatus, Urgency } from "../types";
 import {
+  supportActionRuns,
   supportAiSettings,
   supportApprovedAnswers,
   supportExamples,
@@ -420,6 +421,40 @@ export function createD1AiStore(db: Db): AiStore {
     async setGapStatus(id, status, decidedBy, at) {
       await db.update(supportGaps).set({ status, decidedBy, decidedAt: at }).where(eq(supportGaps.id, id));
     },
+
+    async setSuggestionActions(id, actions) {
+      await db.update(supportSuggestions).set({ actions }).where(eq(supportSuggestions.id, id));
+    },
+
+    async insertActionRun(input) {
+      const [row] = await db
+        .insert(supportActionRuns)
+        .values({ ...input, status: "running" })
+        .onConflictDoNothing({ target: supportActionRuns.idempotencyKey })
+        .returning();
+      return row ? toActionRun(row) : null;
+    },
+
+    async finishActionRun(id, patch, at) {
+      await db
+        .update(supportActionRuns)
+        .set({ ...patch, error: patch.error?.slice(0, 500) ?? null, finishedAt: at })
+        .where(and(eq(supportActionRuns.id, id), eq(supportActionRuns.status, "running")));
+    },
+
+    async linkActionRuns(ids, suggestionId) {
+      if (ids.length) await db.update(supportActionRuns).set({ suggestionId }).where(inArray(supportActionRuns.id, ids));
+    },
+
+    async listActionRuns(input) {
+      const rows = await db
+        .select()
+        .from(supportActionRuns)
+        .where("suggestionId" in input ? eq(supportActionRuns.suggestionId, input.suggestionId) : eq(supportActionRuns.ticketId, input.ticketId))
+        .orderBy(desc(supportActionRuns.createdAt), desc(supportActionRuns.id))
+        .limit("limit" in input ? input.limit : 100);
+      return rows.map(toActionRun);
+    },
   };
   return store;
 }
@@ -432,6 +467,7 @@ function toSettings(row: typeof supportAiSettings.$inferSelect): AiSettings {
     knowledgeSyncedAt: row.knowledgeSyncedAt,
     memoryRunAt: row.memoryRunAt,
     memoryCursor: row.memoryCursor,
+    disabledActions: row.disabledActions,
   };
 }
 
@@ -452,6 +488,7 @@ function toSuggestion(row: typeof supportSuggestions.$inferSelect): Suggestion {
     text: row.text,
     reason: row.reason,
     sources: row.sources,
+    actions: row.actions,
     status: row.status as SuggestionStatus,
     createdAt: row.createdAt,
   };
@@ -492,4 +529,23 @@ function toExample({ example, customerId }: { example: typeof supportExamples.$i
 
 function toGuidanceSuggestion(row: typeof supportGuidanceSuggestions.$inferSelect): GuidanceSuggestion {
   return { id: row.id, rule: row.rule, reason: row.reason, ticketIds: row.ticketIds, status: row.status as GuidanceSuggestion["status"], createdAt: row.createdAt };
+}
+
+function toActionRun(row: typeof supportActionRuns.$inferSelect): ActionRun {
+  return {
+    id: row.id,
+    ticketId: row.ticketId,
+    suggestionId: row.suggestionId,
+    action: row.action,
+    title: row.title,
+    input: row.input,
+    trigger: row.trigger as ActionRun["trigger"],
+    status: row.status as ActionRun["status"],
+    summary: row.summary,
+    data: row.data ?? null,
+    approvedBy: row.approvedBy,
+    durationMs: row.durationMs,
+    createdAt: row.createdAt,
+    finishedAt: row.finishedAt,
+  };
 }

@@ -1,5 +1,6 @@
 import { sql } from "drizzle-orm";
 import { index, integer, primaryKey, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import type { ProposedAction, SuggestionSource } from "../types";
 import { supportTickets } from "./schema";
 
 /* Copilot's tables for SQLite and Cloudflare D1. Only needed when you configure `ai` in createSupport. */
@@ -16,6 +17,7 @@ export const supportAiSettings = sqliteTable("support_ai_settings", {
   knowledgeSyncedAt: ms("knowledge_synced_at"),
   memoryRunAt: ms("memory_run_at"),
   memoryCursor: ms("memory_cursor"),
+  disabledActions: text("disabled_actions", { mode: "json" }).$type<string[]>().notNull().default([]),
   updatedAt: ms("updated_at").notNull().default(now),
 });
 
@@ -74,10 +76,8 @@ export const supportSuggestions = sqliteTable(
     kind: text("kind").notNull(),
     text: text("text"),
     reason: text("reason"),
-    sources: text("sources", { mode: "json" })
-      .$type<{ type: "knowledge" | "answer" | "fact" | "guidance"; id: string; title: string; url?: string | null }[]>()
-      .notNull()
-      .default([]),
+    sources: text("sources", { mode: "json" }).$type<SuggestionSource[]>().notNull().default([]),
+    actions: text("actions", { mode: "json" }).$type<ProposedAction[]>().notNull().default([]),
     modelId: text("model_id"),
     inputTokens: integer("input_tokens"),
     outputTokens: integer("output_tokens"),
@@ -195,6 +195,44 @@ export const supportGapTickets = sqliteTable(
   (t) => [primaryKey({ columns: [t.gapId, t.ticketId] })]
 );
 
+/* Actions (0003_actions.sql): what Copilot and agents did in your product from a ticket. */
+
+/** Every run of an action: who approved it, with what, how it ended and how long it took. */
+export const supportActionRuns = sqliteTable(
+  "support_action_runs",
+  {
+    id: text("id")
+      .primaryKey()
+      .$defaultFn(() => crypto.randomUUID()),
+    ticketId: text("ticket_id")
+      .notNull()
+      .references(() => supportTickets.id, { onDelete: "cascade" }),
+    suggestionId: text("suggestion_id"),
+    action: text("action").notNull(),
+    title: text("title").notNull(),
+    input: text("input", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+    /** draft, suggestion or manual. */
+    trigger: text("trigger").notNull(),
+    /** running, succeeded, failed, timed_out or errored. */
+    status: text("status").notNull().default("running"),
+    summary: text("summary"),
+    data: text("data", { mode: "json" }).$type<Record<string, unknown>>(),
+    /** What was thrown, for whoever reads the log. Agents see a plain message instead. */
+    error: text("error"),
+    approvedBy: text("approved_by"),
+    durationMs: integer("duration_ms"),
+    /** One approval of a proposed action runs once. */
+    idempotencyKey: text("idempotency_key"),
+    createdAt: ms("created_at").notNull().default(now),
+    finishedAt: ms("finished_at"),
+  },
+  (t) => [
+    index("support_action_runs_ticket_idx").on(t.ticketId, t.createdAt),
+    index("support_action_runs_suggestion_idx").on(t.suggestionId),
+    uniqueIndex("support_action_runs_idempotency_idx").on(t.idempotencyKey),
+  ]
+);
+
 export const supportAiSchema = {
   supportAiSettings,
   supportKnowledge,
@@ -206,4 +244,5 @@ export const supportAiSchema = {
   supportGuidanceSuggestions,
   supportGaps,
   supportGapTickets,
+  supportActionRuns,
 };

@@ -188,7 +188,7 @@ export function DraftBar({
                     <bdi className="truncate">{label}</bdi>
                   </a>
                 ) : (
-                  <span className={chip}>
+                  <span className={chip} title={source.detail ?? undefined}>
                     <bdi className="truncate">{label}</bdi>
                   </span>
                 )}

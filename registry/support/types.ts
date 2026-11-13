@@ -108,7 +108,9 @@ export type TicketEventType =
   | "contact_changed"
   | "forwarded"
   /** An agent corrected the topic or urgency Copilot gave the ticket. */
-  | "insight_changed";
+  | "insight_changed"
+  /** An agent ran an action, or approved one Copilot proposed. For agents only: customers never see events. */
+  | "action_run";
 
 export type TicketEvent = {
   id: string;
@@ -148,7 +150,14 @@ export type TicketInsight = {
   updatedAt: Date;
 };
 
-export type SuggestionSource = { type: "knowledge" | "answer" | "fact" | "guidance"; id: string; title: string; url?: string | null };
+export type SuggestionSource = {
+  type: "knowledge" | "answer" | "fact" | "guidance" | "action";
+  id: string;
+  title: string;
+  url?: string | null;
+  /** For "action": what the lookup found, in one line. */
+  detail?: string | null;
+};
 
 export type SuggestionStatus = "pending" | "used" | "edited" | "discarded" | "stale";
 
@@ -161,9 +170,80 @@ export type Suggestion = {
   text: string | null;
   reason: string | null;
   sources: SuggestionSource[];
+  /** Changes the draft assumes: each waits for an agent to approve or skip it. */
+  actions: ProposedAction[];
   status: SuggestionStatus;
   createdAt: Date;
 };
+
+/** "always": an agent approves every run. "never": a read-only lookup Copilot may run while drafting. */
+export type ActionApproval = "always" | "never";
+
+/** One input of an action, as a form field. Built from the action's schema. */
+export type ActionField = {
+  name: string;
+  label: string;
+  description: string | null;
+  /** "json" is the fallback for shapes a small form can't show: lists and nested objects. */
+  kind: "text" | "number" | "boolean" | "select" | "date" | "json";
+  required: boolean;
+  options?: string[];
+};
+
+/** An action an agent can run on a ticket. */
+export type TicketAction = { name: string; title: string; description: string; approval: ActionApproval; fields: ActionField[] };
+
+/** A declared action, for the settings screen. `enabled` only varies for "never" actions: the team can stop Copilot running them on its own. */
+export type ActionSetting = { name: string; title: string; description: string; approval: ActionApproval; enabled: boolean };
+
+/**
+ * succeeded and failed are what your `run` answered (`ok`). timed_out and errored mean it didn't
+ * answer: the change may or may not have happened.
+ */
+export type ActionRunStatus = "running" | "succeeded" | "failed" | "timed_out" | "errored";
+
+/** One run of an action: the log entry. */
+export type ActionRun = {
+  id: string;
+  ticketId: string;
+  /** The suggestion that proposed it, or whose draft looked it up. */
+  suggestionId: string | null;
+  action: string;
+  title: string;
+  input: Record<string, unknown>;
+  /** "draft": a lookup Copilot ran while drafting. "suggestion": a proposal an agent approved. "manual": run from the ticket's menu. */
+  trigger: "draft" | "suggestion" | "manual";
+  status: ActionRunStatus;
+  /** What your `run` said happened. */
+  summary: string | null;
+  data: Record<string, unknown> | null;
+  /** The agent who approved or ran it. Null for lookups Copilot ran. */
+  approvedBy: string | null;
+  durationMs: number | null;
+  createdAt: Date;
+  finishedAt: Date | null;
+};
+
+/** An action Copilot proposes with a draft, as stored. */
+export type ProposedAction = {
+  name: string;
+  title: string;
+  input: Record<string, unknown>;
+  /** Why the conversation calls for it, for the agent. */
+  reason: string;
+  /** An agent skipped it. */
+  declined: boolean;
+};
+
+/** A proposed action with what an agent needs to decide on it. */
+export type ProposedActionView = ProposedAction & {
+  state: "proposed" | "running" | "done" | "failed" | "declined";
+  fields: ActionField[];
+  /** Its latest run, once approved. */
+  run: ActionRun | null;
+};
+
+export type SuggestionView = Omit<Suggestion, "actions"> & { actions: ProposedActionView[] };
 
 /**
  * An answer the team wrote once and approved for reuse. Drafts treat it as their most trusted

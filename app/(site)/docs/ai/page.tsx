@@ -5,7 +5,7 @@ import { Callout, DocsShell, H2, Props, Step, Steps } from "@/site/docs/shell";
 
 export const metadata: Metadata = {
   title: "AI",
-  description: "Optional AI for the inbox: triage, one-line summaries and suggested replies written from your docs, with any AI SDK model, and a memory of what your team teaches it.",
+  description: "Optional AI for the inbox: triage, one-line summaries and suggested replies written from your docs, with any AI SDK model, a memory of what your team teaches it, and actions in your product that agents approve.",
   alternates: { canonical: "/docs/ai" },
 };
 
@@ -191,6 +191,81 @@ const MEMORY_CLIENT = `ai: {
   draftArticle: (input) => call("ai.draftArticle", input),
 },`;
 
+const ACTIONS = `import { z } from "zod";
+import { supportAi, supportAction } from "@/lib/support/ai";
+
+supportAi({
+  model,
+  store,
+  actions: [
+    // A lookup: read-only, so it may run while a reply is drafted.
+    supportAction({
+      name: "last_invoice",
+      title: "Look up last invoice",
+      description: "The customer's most recent invoice and whether it's paid.",
+      input: z.object({}),
+      approval: "never",
+      run: async ({ customer }) => {
+        const invoice = await billing.lastInvoice(customer.id);
+        if (!invoice) return { ok: true, summary: "No invoices yet." };
+        return {
+          ok: true,
+          summary: \`Invoice \${invoice.number} for \${invoice.total}, \${invoice.status}\`,
+          data: { number: invoice.number, total: invoice.total, status: invoice.status, url: invoice.url },
+        };
+      },
+    }),
+
+    // A change: proposed with the reply, run when an agent approves it.
+    supportAction({
+      name: "extend_trial",
+      title: "Extend trial",
+      description: "Extends the customer's trial. Use when they ask for more time to evaluate.",
+      input: z.object({ days: z.number().int().min(1).max(30).describe("Days to add") }),
+      available: ({ customer }) => billing.isOnTrial(customer.id),
+      run: async ({ input, customer, agent }) => {
+        const until = await billing.extendTrial(customer.id, input.days, { by: agent?.id });
+        return { ok: true, summary: \`Trial extended to \${until}\` };
+      },
+    }),
+
+    supportAction({
+      name: "resend_verification",
+      title: "Resend verification email",
+      description: "Sends the account's verification email again.",
+      input: z.object({ email: z.string().email() }),
+      run: async ({ input, customer }) => {
+        const sent = await accounts.resendVerification(customer.id, input.email);
+        return sent ? { ok: true, summary: \`Sent to \${input.email}\` } : { ok: false, summary: "That address isn't on this account." };
+      },
+    }),
+  ],
+});`;
+
+const ACTIONS_API = `case "ai.listActions":
+  return Response.json(await s.ai.ticketActions(input));
+case "ai.runAction":
+  // The signed-in agent is the approval. Never take actorId from the request body.
+  return Response.json(await s.ai.runAction({ ...input, actorId: agent.id }));
+case "ai.declineAction":
+  return Response.json(await s.ai.declineAction({ ...input, actorId: agent.id }));
+case "ai.setActionEnabled":
+  return Response.json(await s.ai.setActionEnabled(input));
+case "ai.getSettings":
+  return Response.json({
+    ...(await s.ai.getSettings()),
+    sources: await s.ai.listKnowledgeSources(),
+    actions: await s.ai.listActions(),
+  });`;
+
+const ACTIONS_CLIENT = `ai: {
+  // …the methods above. Each of these is optional: the screens show what you provide.
+  listActions: (input) => call("ai.listActions", input),
+  runAction: (input) => call("ai.runAction", input),
+  declineAction: (input) => call("ai.declineAction", input),
+  setActionEnabled: (input) => call("ai.setActionEnabled", input),
+},`;
+
 const EMBEDDER = `import { embedMany } from "ai";
 import { openai } from "@ai-sdk/openai";
 
@@ -217,6 +292,7 @@ export default function Ai() {
         { id: "screens", title: "Screens" },
         { id: "voice", title: "Voice" },
         { id: "memory", title: "Memory" },
+        { id: "actions", title: "Actions" },
         { id: "methods", title: "Methods" },
         { id: "privacy", title: "Privacy" },
       ]}
@@ -241,8 +317,8 @@ export default function Ai() {
         <Step title="Create the tables">
           <Code title="db/schema.ts" lang="ts" code={`export * from "@/lib/support/postgres/ai-schema";`} className="mt-1" />
           <p className="mt-3 text-muted-foreground">
-            Then generate and apply a migration with Drizzle as usual. <code>lib/support/postgres/0001_ai.sql</code> and{" "}
-            <code>0002_memory.sql</code> are the reference.
+            Then generate and apply a migration with Drizzle as usual. <code>lib/support/postgres/0001_ai.sql</code>,{" "}
+            <code>0002_memory.sql</code> and <code>0003_actions.sql</code> are the reference.
           </p>
         </Step>
         <Step title="Give it a model and your docs">
@@ -297,6 +373,7 @@ export default function Ai() {
           { name: "store", type: "AiStore", required: true, description: "createPostgresAiStore(db) or createD1AiStore(db), on the same database as your support store." },
           { name: "fastModel", type: "LanguageModel", default: "model", description: "Triage, rewrites and translations. A small, fast model is enough." },
           { name: "knowledge", type: "KnowledgeSource[]", default: "[]", description: "What suggestions may answer from. See Knowledge." },
+          { name: "actions", type: "SupportAction[]", default: "[]", description: "What AI may do in your product for the customer on the ticket. See Actions." },
           { name: "defer", type: "(work: Promise) => void", description: "Runs the model calls after the webhook has answered. Without it they run in the next runScheduled." },
           { name: "agentLanguage", type: "string", default: '"en"', description: "The language your agents read (BCP-47), for summaries, reasons and translations." },
           { name: "knowledgeBudget", type: "number", default: "120000", description: "Characters of knowledge a prompt may carry. Past it, only the articles closest to the conversation are sent." },
@@ -504,6 +581,68 @@ export default function Ai() {
       <Code title="app/api/support/route.ts" lang="ts" code={MEMORY_API} />
       <Code title="app/admin/support/client.ts" lang="ts" code={MEMORY_CLIENT} />
 
+      <H2 id="actions">Actions</H2>
+      <p>
+        A reply that says &quot;done&quot; beats one that says &quot;we&apos;ll look into it&quot;. Actions are what
+        your product can do for a customer from a ticket: look up an invoice, resend an email, extend a trial. You
+        declare them in code; AI looks things up while it drafts and proposes changes with the reply; an agent approves
+        each change before it happens. It needs the <code>0003_actions</code> migration, and <code>zod</code> (or any
+        Standard Schema library) for the inputs.
+      </p>
+      <Code title="lib/support/index.ts" lang="ts" code={ACTIONS} />
+      <Props
+        rows={[
+          { name: "name", type: "string", required: true, description: "How the model and the log refer to it: lowercase letters, digits and underscores, unique." },
+          { name: "title", type: "string", required: true, description: 'What agents see, such as "Extend trial".' },
+          { name: "description", type: "string", required: true, description: "For the model: what it does and when to use it." },
+          { name: "input", type: "schema", required: true, description: "A Zod schema, any Standard Schema, or the AI SDK's jsonSchema(). An object. It is what the model must fill in, what an agent's edits are checked against, and what the form is built from." },
+          { name: "approval", type: '"always" | "never"', default: '"always"', description: '"never" is for read-only lookups: AI may run them on its own while drafting. Everything else waits for an agent.' },
+          { name: "run", type: "({ input, ticket, customer, contact, agent, signal }) => { ok, summary, data? }", required: true, description: "Does it. summary is one line for the agent and the timeline; data is what a draft may quote. Answer ok: false when it didn't happen; throw only when you can't tell." },
+          { name: "available", type: "({ ticket, customer }) => boolean", description: "Whether it applies to this ticket: a plan, a status, a channel. Defaults to always." },
+          { name: "timeoutMs", type: "number", default: "15000", description: "How long a run may take. After that the signal is aborted and the run is logged as timed out." },
+        ]}
+      />
+      <ul>
+        <li>
+          <strong>Lookups.</strong> While drafting, the model can call your <code>&quot;never&quot;</code> actions
+          through the AI SDK&apos;s tool calling, up to six per draft, and state what they returned. Each one the reply
+          relies on is listed under &quot;Based on&quot; with its result, next to your articles and account facts. A
+          lookup that fails tells the model there is no answer, never what was thrown.
+        </li>
+        <li>
+          <strong>Proposed actions.</strong> When the customer&apos;s request calls for a change, the suggestion comes
+          with it: a card under the suggested reply with what it will do, why, and its inputs, which the agent can edit.
+          The reply is written as if it has been done. Approve runs it and records the result on the ticket&apos;s
+          timeline, which only agents see. Skip rewrites the reply so it no longer says so; changing the inputs before
+          approving rewrites it to what was actually done. Sending while a proposal is still undecided asks first.
+        </li>
+        <li>
+          <strong>By hand.</strong> Every available action is also in the ticket&apos;s ⋯ menu, with a small form built
+          from its schema: text, number, date, a switch, a select for an enum, and a JSON field for lists and nested
+          objects.
+        </li>
+        <li>
+          <strong>Settings.</strong> <code>SupportAiSettings</code> lists your actions and how each one runs. The team
+          can stop a lookup from running on its own (agents can still run it). Whether an action needs approval is not
+          a setting: it is in your code, where a change to it is reviewed.
+        </li>
+      </ul>
+      <Callout title="What keeps an action safe">
+        <strong>The customer is never an input.</strong> An action runs for the customer the ticket is linked to, passed
+        by Tendkit; a ticket from an unknown sender has no actions at all. <strong>A message can&apos;t run a change.</strong>{" "}
+        When the model calls an action that needs approval, the call only records a proposal: your <code>run</code> is
+        reachable through <code>runAction</code> alone, which takes the signed-in agent&apos;s id from your server.
+        Inputs are checked against your schema when proposed and again when approved. <strong>One approval runs once.</strong>{" "}
+        A double click, or two agents approving the same proposal, get the first run; after a failure, approving again
+        is a new attempt. <strong>Every run is logged</strong> in <code>support_action_runs</code>: who approved it, the
+        inputs, how it ended and how long it took, including lookups. A run that throws or times out is shown to the
+        agent as unconfirmed, with advice to check the account before trying again, and what was thrown stays in your
+        log.
+      </Callout>
+      <p>To turn the screens on, expose the methods and add them to your client:</p>
+      <Code title="app/api/support/route.ts" lang="ts" code={ACTIONS_API} />
+      <Code title="app/admin/support/client.ts" lang="ts" code={ACTIONS_CLIENT} />
+
       <H2 id="methods">Methods</H2>
       <p>
         <code>support().ai</code> exists only when <code>ai</code> is configured.
@@ -526,6 +665,11 @@ export default function Ai() {
           { name: "decideGuidanceSuggestion", type: "({ id, accept, rule?, actorId })", description: "Accepting appends the rule (or your rewording of it) to the guidance and returns the settings. Dismissing keeps it from coming back." },
           { name: "listGaps / dismissGap", type: "", description: "Open gaps, most asked first: { id, theme, count, lastSeenAt, tickets }." },
           { name: "draftArticle", type: "({ gapId } | { ticketIds }) => { title, markdown }", description: "A help article from the answered tickets of a gap, or from up to six tickets you choose." },
+          { name: "ticketActions", type: "({ ticketId }) => TicketAction[]", description: "The actions that apply to a ticket, each with its form fields. Empty when the ticket isn't linked to a customer." },
+          { name: "runAction", type: "({ ticketId, action, input, actorId, suggestionId?, text? }) => { run, text }", description: "Runs an action for the ticket's customer and logs it. With suggestionId it approves a proposal, once. text is the reply box, returned rewritten when the inputs were changed." },
+          { name: "declineAction", type: "({ ticketId, suggestionId, action, actorId, text? }) => { text }", description: "Skips a proposal and returns the reply rewritten without it." },
+          { name: "listActions / setActionEnabled", type: "", description: "Every declared action as { name, title, description, approval, enabled }; setActionEnabled({ name, enabled }) only accepts lookups." },
+          { name: "listActionRuns", type: "({ ticketId, limit? }) => ActionRun[]", description: "A ticket's log, newest first: action, input, trigger (draft, suggestion or manual), status, summary, approvedBy, durationMs." },
           { name: "setInsight", type: "({ ticketId, actorId, topic?, urgency? })", description: "An agent's correction. Kept on later messages and recorded on the timeline." },
         ]}
       />
@@ -540,13 +684,15 @@ export default function Ai() {
         With AI on, the conversation on a ticket (customer messages, your replies and internal notes), that
         customer&apos;s account facts, your guidance and your knowledge articles are sent to the model provider you
         configure, under your own account and its terms. Tendkit has no service of its own and sends nothing anywhere
-        else. Attachments are never sent. Voice recordings go to your transcription provider, or to the browser&apos;s
+        else. So is what a lookup returns (<code>summary</code> and <code>data</code>): return only what a reply may
+        say. Attachments are never sent. Voice recordings go to your transcription provider, or to the browser&apos;s
         speech service when you haven&apos;t set one, and are never stored.
       </Callout>
       <p>
         Insights, suggestions and their outcomes are stored in your database, in <code>support_ticket_insights</code> and{" "}
         <code>support_suggestions</code>, and are deleted with the ticket. So are the corrections memory keeps (
-        <code>support_examples</code>) and a ticket&apos;s place in a gap. Approved answers and accepted guidance are your
+        <code>support_examples</code>), a ticket&apos;s place in a gap, and the log of the actions run on it (
+        <code>support_action_runs</code>, with their inputs and results). Approved answers and accepted guidance are your
         team&apos;s own text and stay until you delete them. The daily review sends the month&apos;s rewritten drafts, and
         the questions that went unanswered, to the same provider as everything else. Tell your customers about the provider where
         your privacy policy requires it, and choose one whose data terms fit your product.

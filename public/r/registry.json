@@ -103,7 +103,7 @@
       "name": "support-ai",
       "type": "registry:item",
       "title": "Support AI",
-      "description": "Optional AI for the inbox: triage, summaries and suggested replies from your docs, plus memory (approved answers, learning from edits, gaps), with any Vercel AI SDK model.",
+      "description": "Optional AI for the inbox: triage, summaries and suggested replies from your docs, memory (approved answers, learning from edits, gaps) and actions in your product that agents approve, with any Vercel AI SDK model.",
       "dependencies": [
         "ai@^7"
       ],
@@ -125,6 +125,11 @@
           "path": "registry/support/memory.ts",
           "type": "registry:file",
           "target": "~/lib/support/memory.ts"
+        },
+        {
+          "path": "registry/support/actions.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/actions.ts"
         },
         {
           "path": "registry/support/knowledge.ts",
@@ -165,6 +170,11 @@
           "path": "registry/support/postgres/migrations/0002_memory.sql",
           "type": "registry:file",
           "target": "~/lib/support/postgres/0002_memory.sql"
+        },
+        {
+          "path": "registry/support/postgres/migrations/0003_actions.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/postgres/0003_actions.sql"
         }
       ]
     },
@@ -200,6 +210,11 @@
           "path": "registry/support/d1/migrations/0002_memory.sql",
           "type": "registry:file",
           "target": "~/lib/support/d1/0002_memory.sql"
+        },
+        {
+          "path": "registry/support/d1/migrations/0003_actions.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/d1/0003_actions.sql"
         }
       ]
     },
@@ -439,6 +454,11 @@
           "path": "registry/support-ui/memory.tsx",
           "type": "registry:file",
           "target": "~/components/support/memory.tsx"
+        },
+        {
+          "path": "registry/support-ui/actions.tsx",
+          "type": "registry:file",
+          "target": "~/components/support/actions.tsx"
         },
         {
           "path": "registry/support-ui/support-ai-settings.tsx",

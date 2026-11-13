@@ -11,6 +11,7 @@ import type { Address, ApprovedAnswer, FileInfo, TicketDetail } from "./client";
 import { contactLabel, fillPlaceholders, formatBytes } from "./format";
 import { AnswerPicker, ApprovedAnswerDialog, answerOptionId, matchAnswers } from "./memory";
 import { DraftBar, RefineRow, foreignLanguage, type RefineAction } from "./ai";
+import { ProposedActions, undecidedActions } from "./actions";
 import { VoiceButton, VoicePanel, useVoice, useVoiceEngine, type VoiceIntent } from "./voice";
 
 type Mode = "reply" | "note";
@@ -59,6 +60,10 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
   const [busy, setBusy] = useState<string | null>(null);
   const offered = useRef<string | null>(null);
   const applied = Boolean(draft && draftId === draft.id && text.trim());
+  // What the suggested reply assumes was done and nobody has approved or skipped yet.
+  const undecided = applied && ai?.runAction ? undecidedActions(draft?.actions) : [];
+  /** Set when the agent pressed Send with those still open: how they wanted it sent. */
+  const [confirming, setConfirming] = useState<{ status: "waiting" | "solved" } | null>(null);
   const lastMessage = detail.timeline.filter((e) => e.type === "message" && e.message.kind !== "note" && !e.message.auto).at(-1);
   const canSuggest = Boolean(ai && !blocked && !suggestion && lastMessage?.type === "message" && lastMessage.message.kind === "inbound");
 
@@ -260,6 +265,7 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
       setDraftId(null);
       setHistory([]);
       setSlash(null);
+      setConfirming(null);
     },
     onError: (e) => setError(e instanceof Error && e.message ? e.message : t("errors.send")),
     onSettled: () => {
@@ -286,6 +292,11 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
     if (fileInput.current) fileInput.current.value = "";
   };
 
+  /** Sends, unless the reply says something was done that nobody approved: then it asks first. */
+  const trySend = (status: "waiting" | "solved" | null) => {
+    if (mode === "reply" && undecided.length) return setConfirming({ status: status ?? "waiting" });
+    send.mutate(status);
+  };
   const tooLong = maxLength !== null && text.length > maxLength;
   const canSend = text.trim().length > 0 && !tooLong && uploading === 0 && !send.isPending && busy === null && !voiceOn && (mode === "note" || !blocked);
 
@@ -374,6 +385,18 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
             </div>
           )}
           {mode === "reply" && draft && <DraftBar suggestion={draft} applied={applied} onUse={applyDraft} onDiscard={discardDraft} />}
+          {mode === "reply" && draft?.actions && (
+            <ProposedActions
+              ticketId={ticketId}
+              suggestionId={draft.id}
+              actions={draft.actions}
+              text={applied ? text : null}
+              onText={(next) => {
+                setHistory((h) => [...h, text]);
+                setText(next);
+              }}
+            />
+          )}
           {mode === "reply" && suggestion?.kind === "cannot_answer" && !text.trim() && (
             <p dir="auto" className="px-4 pt-3 text-xs text-muted-foreground">
               {t("ai.noDraft", { reason: suggestion.reason ?? "" })}
@@ -407,7 +430,7 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
                   chooseAnswer(matches[activeAnswer] ?? matches[0]!);
                 } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSend) {
                   e.preventDefault();
-                  send.mutate(null);
+                  trySend(null);
                 }
               }}
               placeholder={t(mode === "reply" ? (hasAnswers ? "composer.replyPlaceholderAnswers" : "composer.replyPlaceholder") : "composer.notePlaceholder")}
@@ -436,6 +459,20 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
             </ul>
           )}
           {error && <p className="px-4 pb-2 text-sm text-destructive">{error}</p>}
+          {confirming && undecided.length > 0 && (
+            <div role="alert" className="mx-4 mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-sm dark:border-amber-500/30 dark:bg-amber-500/10">
+              <p className="min-w-0 flex-1 basis-64">{t("ai.actions.unapproved", { titles: undecided.map((a) => a.title).join(", ") })}</p>
+              <span className="flex shrink-0 items-center gap-1.5">
+                <Button type="button" size="sm" variant="ghost" className="h-7" onClick={() => setConfirming(null)}>
+                  {t("ai.actions.review")}
+                </Button>
+                <Button type="button" size="sm" variant="outline" className="h-7" disabled={!canSend} onClick={() => send.mutate(confirming.status)}>
+                  {send.isPending && <Loader2 className="size-3.5 animate-spin" />}
+                  {t("ai.actions.sendAnyway")}
+                </Button>
+              </span>
+            </div>
+          )}
           {canSpeak && <VoicePanel voice={voice} intent={voiceIntent} intents={voiceIntents} onIntent={chooseVoiceIntent} />}
           {ai && mode === "reply" && !voiceOn && (text.trim() || history.length > 0) && (
             <RefineRow
@@ -488,10 +525,10 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
             <div className="flex items-center gap-2">
               {mode === "reply" ? (
                 <>
-                  <Button type="button" variant="outline" size="sm" disabled={!canSend} onClick={() => send.mutate("solved")}>
+                  <Button type="button" variant="outline" size="sm" disabled={!canSend} onClick={() => trySend("solved")}>
                     {t("composer.sendAndSolve")}
                   </Button>
-                  <Button type="button" size="sm" disabled={!canSend} onClick={() => send.mutate("waiting")}>
+                  <Button type="button" size="sm" disabled={!canSend} onClick={() => trySend("waiting")}>
                     {send.isPending && <Loader2 className="size-4 animate-spin" />}
                     {t("composer.send")}
                   </Button>

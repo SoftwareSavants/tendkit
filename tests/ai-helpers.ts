@@ -7,7 +7,17 @@ import { createTestStores, fakeChannel, inbound, memoryStorage, testDirectory } 
 
 /* What the AI suites share: a scripted model, and a support service wired to it. */
 
-export type Call = { system: string; prompt: string; json: boolean };
+export type Call = {
+  system: string;
+  prompt: string;
+  json: boolean;
+  /** The tools the model was offered, and what the ones it called earlier in this draft returned. */
+  tools: string[];
+  toolResults: unknown[];
+};
+
+/** What a scripted model answers to call tools instead of writing. */
+export const calls = (...toolCalls: { name: string; input: unknown }[]) => ({ toolCalls });
 
 /** A model that answers from a function and remembers what it was asked. */
 export function scripted(id: string, reply: (call: Call) => unknown) {
@@ -20,12 +30,24 @@ export function scripted(id: string, reply: (call: Call) => unknown) {
           .filter((m) => m.role === role)
           .map((m) => (typeof m.content === "string" ? m.content : m.content.map((part) => (part.type === "text" ? part.text : "")).join("")))
           .join("\n");
-      const call = { system: text("system"), prompt: text("user"), json: options.responseFormat?.type === "json" };
+      const toolResults = options.prompt.flatMap((m) =>
+        m.role === "tool" ? m.content.flatMap((part) => (part.type === "tool-result" ? [(part.output as { value?: unknown }).value] : [])) : []
+      );
+      const call = {
+        system: text("system"),
+        prompt: text("user"),
+        json: options.responseFormat?.type === "json",
+        tools: (options.tools ?? []).map((t) => t.name),
+        toolResults,
+      };
       calls.push(call);
       const value = reply(call);
+      const toolCalls = (value as { toolCalls?: { name: string; input: unknown }[] } | null)?.toolCalls;
       return {
-        content: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }],
-        finishReason: { unified: "stop" as const, raw: undefined },
+        content: toolCalls
+          ? toolCalls.map((c, i) => ({ type: "tool-call" as const, toolCallId: `call-${calls.length}-${i}`, toolName: c.name, input: JSON.stringify(c.input) }))
+          : [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }],
+        finishReason: { unified: toolCalls ? ("tool-calls" as const) : ("stop" as const), raw: undefined },
         usage: {
           inputTokens: { total: 900, noCache: 900, cacheRead: undefined, cacheWrite: undefined },
           outputTokens: { total: 60, text: 60, reasoning: undefined },

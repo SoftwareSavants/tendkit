@@ -42,7 +42,9 @@ export default function Upgrading() {
       <p>
         Each schema change also ships as a numbered reference migration next to your store, so you can see exactly what
         an update adds: <code>0001_ai.sql</code> for the AI tables, <code>0002_memory.sql</code> for AI memory (approved
-        answers, corrections, guidance suggestions and gaps, plus two columns on <code>support_ai_settings</code>). Apply
+        answers, corrections, guidance suggestions and gaps, plus two columns on <code>support_ai_settings</code>),{" "}
+        <code>0003_actions.sql</code> for AI actions (the <code>support_action_runs</code> log, plus a column each on{" "}
+        <code>support_suggestions</code> and <code>support_ai_settings</code>). Apply
         the migration before you deploy the updated code.
       </p>
     </DocsShell>

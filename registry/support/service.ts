@@ -29,7 +29,7 @@ import type {
   DeliveryStatus,
   Identity,
   Message,
-  Suggestion,
+  SuggestionView,
   Ticket,
   TicketEvent,
   TicketInsight,
@@ -80,6 +80,8 @@ export type SupportAiContext = {
   accountFacts(customerId: string): Promise<AccountFact[]>;
   /** The customer's name from the directory, or null. Never throws. */
   customerName(customerId: string): Promise<string | null>;
+  /** An agent from the directory, or null. Never throws. */
+  agent(agentId: string): Promise<Agent | null>;
   now: () => Date;
   log: NonNullable<SupportOptions["log"]>;
 };
@@ -91,7 +93,7 @@ export interface SupportAiEngine<Api = unknown> {
   messageReceived(input: { ticket: Ticket; message: Message }): Promise<void>;
   /** An agent's reply went out. Must not throw. */
   replySent(input: { ticketId: string; suggestionId: string | null; message: Message; text: string }): Promise<void>;
-  ticketDetail(ticketId: string): Promise<{ insight: TicketInsight | null; suggestion: Suggestion | null }>;
+  ticketDetail(ticketId: string): Promise<{ insight: TicketInsight | null; suggestion: SuggestionView | null }>;
   listDetails(ticketIds: string[]): Promise<Map<string, { urgency: Urgency | null; summary: string | null; draftReady: boolean }>>;
   runScheduled(): Promise<Record<string, unknown>>;
 }
@@ -194,7 +196,7 @@ export type TicketDetail = {
   accountFacts: AccountFact[];
   /** Copilot, when configured: what it understood, and its latest pending suggestion. */
   insight: TicketInsight | null;
-  suggestion: Suggestion | null;
+  suggestion: SuggestionView | null;
 };
 
 export type PortalTicket = Pick<
@@ -279,6 +281,14 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
         return (await directory.getCustomers([customerId]))[0]?.name ?? null;
       } catch (error) {
         log("warn", "directory.getCustomers failed", { error: String(error) });
+        return null;
+      }
+    },
+    agent: async (agentId) => {
+      try {
+        return (await directory.listAgents()).find((a) => a.id === agentId) ?? null;
+      } catch (error) {
+        log("warn", "directory.listAgents failed", { error: String(error) });
         return null;
       }
     },

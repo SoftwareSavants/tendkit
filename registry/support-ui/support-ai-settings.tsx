@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useSupport } from "./provider";
-import type { ApprovedAnswer, Gap, GuidanceSuggestion } from "./client";
+import type { ActionSetting, ApprovedAnswer, Gap, GuidanceSuggestion } from "./client";
 import { formatWhen } from "./format";
 import { languageName } from "./ai";
 import { ApprovedAnswerDialog, ArticleDialog } from "./memory";
@@ -187,9 +187,64 @@ export function SupportAiSettings() {
         {sync.error && <p className="text-sm text-destructive">{t("ai.failed")}</p>}
       </section>
 
+      <Actions actions={saved.actions ?? []} />
       <ApprovedAnswers />
       <Gaps />
     </div>
+  );
+}
+
+/**
+ * What AI can do in your product, as declared in code. A lookup can be kept from running on its
+ * own; whether an action needs approval is not a setting.
+ */
+function Actions({ actions }: { actions: ActionSetting[] }) {
+  const { client, t } = useSupport();
+  const queryClient = useQueryClient();
+  const ai = client.ai;
+  const toggle = useMutation({
+    mutationFn: (input: { name: string; enabled: boolean }) => ai!.setActionEnabled!(input),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["support", "ai", "settings"] }),
+  });
+  if (!actions.length) return null;
+
+  return (
+    <section className="space-y-2 border-t pt-6">
+      <div className="space-y-1">
+        <h2 className="text-sm font-medium">{t("ai.actions.heading")}</h2>
+        <p className="text-sm text-muted-foreground">{t("ai.actions.help")}</p>
+      </div>
+      <ul className="divide-y rounded-xl border bg-card">
+        {actions.map((action) => {
+          const lookup = action.approval === "never";
+          // While the change is on its way, the switch shows where it's going.
+          const enabled = toggle.isPending && toggle.variables?.name === action.name ? toggle.variables.enabled : action.enabled;
+          return (
+            <li key={action.name} className="flex items-center justify-between gap-4 px-4 py-3">
+              <div className="min-w-0">
+                {lookup && ai?.setActionEnabled ? (
+                  <label htmlFor={`support-action-${action.name}`} className="text-sm font-medium">
+                    {action.title}
+                  </label>
+                ) : (
+                  <p className="text-sm font-medium">{action.title}</p>
+                )}
+                <p className="text-sm text-muted-foreground">{t(!lookup ? "ai.actions.needsApproval" : enabled ? "ai.actions.runsAlone" : "ai.actions.runsByHand")}</p>
+              </div>
+              {lookup && ai?.setActionEnabled && (
+                <Switch
+                  id={`support-action-${action.name}`}
+                  checked={enabled}
+                  disabled={toggle.isPending}
+                  onCheckedChange={(checked) => toggle.mutate({ name: action.name, enabled: Boolean(checked) })}
+                />
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      {toggle.error && <p className="text-sm text-destructive">{toggle.error instanceof Error && toggle.error.message ? toggle.error.message : t("ai.failed")}</p>}
+    </section>
   );
 }
 
