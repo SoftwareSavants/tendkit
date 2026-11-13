@@ -45,7 +45,7 @@
       "name": "support-postgres",
       "type": "registry:item",
       "title": "Postgres store",
-      "description": "Drizzle schema, a starting migration and the store for Postgres (Supabase, Neon, RDS, PGlite\u2026).",
+      "description": "Drizzle schema, a starting migration and the store for Postgres (Supabase, Neon, RDS, PGlite…).",
       "dependencies": [
         "drizzle-orm@^0.45"
       ],
@@ -103,7 +103,7 @@
       "name": "support-ai",
       "type": "registry:item",
       "title": "Support AI",
-      "description": "Optional AI for the inbox: triage, summaries and suggested replies from your docs, with any Vercel AI SDK model.",
+      "description": "Optional AI for the inbox: triage, summaries and suggested replies from your docs, plus memory (approved answers, learning from edits, gaps), with any Vercel AI SDK model.",
       "dependencies": [
         "ai@^7"
       ],
@@ -120,6 +120,11 @@
           "path": "registry/support/ai-store.ts",
           "type": "registry:file",
           "target": "~/lib/support/ai-store.ts"
+        },
+        {
+          "path": "registry/support/memory.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/memory.ts"
         },
         {
           "path": "registry/support/knowledge.ts",
@@ -155,6 +160,11 @@
           "path": "registry/support/postgres/migrations/0001_ai.sql",
           "type": "registry:file",
           "target": "~/lib/support/postgres/0001_ai.sql"
+        },
+        {
+          "path": "registry/support/postgres/migrations/0002_memory.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/postgres/0002_memory.sql"
         }
       ]
     },
@@ -185,6 +195,11 @@
           "path": "registry/support/d1/migrations/0001_ai.sql",
           "type": "registry:file",
           "target": "~/lib/support/d1/0001_ai.sql"
+        },
+        {
+          "path": "registry/support/d1/migrations/0002_memory.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/d1/0002_memory.sql"
         }
       ]
     },
@@ -419,6 +434,11 @@
           "path": "registry/support-ui/voice.tsx",
           "type": "registry:file",
           "target": "~/components/support/voice.tsx"
+        },
+        {
+          "path": "registry/support-ui/memory.tsx",
+          "type": "registry:file",
+          "target": "~/components/support/memory.tsx"
         },
         {
           "path": "registry/support-ui/support-ai-settings.tsx",

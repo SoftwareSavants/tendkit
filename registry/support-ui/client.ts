@@ -28,7 +28,7 @@ export type TicketInsight = {
   summary: string | null;
 };
 
-export type SuggestionSource = { type: "knowledge" | "fact" | "guidance"; id: string; title: string; url?: string | null };
+export type SuggestionSource = { type: "knowledge" | "answer" | "fact" | "guidance"; id: string; title: string; url?: string | null };
 
 /** A suggested reply, or why there isn't one. */
 export type Suggestion = {
@@ -140,6 +140,27 @@ export type AiSettings = {
   sources: { id: string; articles: number; syncedAt: DateLike | null }[];
 };
 
+/** An answer the team approved for reuse. Its text may hold {name}, {company} and {agent}, filled in when it's inserted. */
+export type ApprovedAnswer = {
+  id: string;
+  title: string;
+  text: string;
+  /** BCP-47 when it's only for customers writing in that language; null for everyone. */
+  language: string | null;
+};
+
+/** A rule the team's edits suggest adding to the guidance. */
+export type GuidanceSuggestion = { id: string; rule: string; reason: string; tickets: { id: string; number: number }[] };
+
+/** A question the knowledge didn't answer, with the latest tickets that asked it. */
+export type Gap = {
+  id: string;
+  theme: string;
+  count: number;
+  lastSeenAt: DateLike | null;
+  tickets: { id: string; number: number; subject: string | null }[];
+};
+
 /**
  * The AI methods, each calling `support.ai` on your server. Leave `ai` off the client and the
  * screens show no AI at all.
@@ -160,6 +181,24 @@ export interface SupportAiClient {
    * Leave it off and the reply box uses the browser's own speech recognition where there is one.
    */
   transcribe?(input: { audio: Blob; language?: string }): Promise<{ text: string }>;
+
+  /*
+   * Memory. Each method is optional and the screens show only what you provide: approved answers
+   * need the first three, "Save as approved answer" works better with `generaliseAnswer`.
+   */
+  listApprovedAnswers?(): Promise<ApprovedAnswer[]>;
+  /** Pass your agent's id as `actorId` on the server. `gapId` resolves the gap the answer was written for. */
+  saveApprovedAnswer?(input: { id?: string; title: string; text: string; language: string | null; ticketId?: string; gapId?: string }): Promise<unknown>;
+  deleteApprovedAnswer?(input: { id: string }): Promise<unknown>;
+  /** A sent reply or a draft with the customer's details taken out, for the agent to review before saving. */
+  generaliseAnswer?(input: { ticketId: string; text: string }): Promise<{ title: string; text: string; language: string | null }>;
+  listGuidanceSuggestions?(): Promise<GuidanceSuggestion[]>;
+  /** `rule` is the agent's wording when they changed it before accepting. */
+  decideGuidanceSuggestion?(input: { id: string; accept: boolean; rule?: string }): Promise<unknown>;
+  listGaps?(): Promise<Gap[]>;
+  dismissGap?(input: { id: string }): Promise<unknown>;
+  /** A Markdown help article written from how agents answered a gap's tickets, or the tickets given. */
+  draftArticle?(input: { gapId: string } | { ticketIds: string[] }): Promise<{ title: string; markdown: string }>;
 }
 
 export interface SupportClient {

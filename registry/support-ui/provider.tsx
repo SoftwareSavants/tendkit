@@ -20,6 +20,11 @@ type SupportContextValue = {
   client: SupportClient;
   t: Translate;
   locale: string;
+  /**
+   * The language voice listens in, when the browser does the listening. Speech recognition wants
+   * a region ("fr-FR") where a UI locale is often bare ("fr"). Defaults to `locale`.
+   */
+  speechLocale: string;
   /** The signed-in agent. */
   viewerId: string;
   ticketHref: (id: string) => string;
@@ -36,16 +41,18 @@ export function SupportProvider({
   children,
   t = createTranslator(),
   locale = "en",
+  speechLocale = locale,
   responseTargetMinutes = 240,
   ...value
-}: Omit<SupportContextValue, "t" | "locale" | "responseTargetMinutes"> & {
+}: Omit<SupportContextValue, "t" | "locale" | "speechLocale" | "responseTargetMinutes"> & {
   t?: Translate;
   locale?: string;
+  speechLocale?: string;
   responseTargetMinutes?: number;
   children: ReactNode;
 }) {
   return (
-    <SupportContext.Provider value={{ ...value, t, locale, responseTargetMinutes }}>{children}</SupportContext.Provider>
+    <SupportContext.Provider value={{ ...value, t, locale, speechLocale, responseTargetMinutes }}>{children}</SupportContext.Provider>
   );
 }
 

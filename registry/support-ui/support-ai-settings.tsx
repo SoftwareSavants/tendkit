@@ -1,19 +1,27 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Loader2, RefreshCw, X } from "lucide-react";
+import { Check, Loader2, Pencil, Plus, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useSupport } from "./provider";
+import type { ApprovedAnswer, Gap, GuidanceSuggestion } from "./client";
 import { formatWhen } from "./format";
+import { languageName } from "./ai";
+import { ApprovedAnswerDialog, ArticleDialog } from "./memory";
 
 type Form = { guidance: string; topics: string[]; draftOnArrival: boolean };
 
-/** Where a team tells AI how they answer: guidance, topics, whether to suggest replies, and what it knows. */
+/**
+ * Where a team tells AI how they answer: guidance, topics, whether to suggest replies, and what it
+ * knows. With memory, also what it learned from them: rules their edits suggest, the answers they
+ * approved, and the questions that went unanswered.
+ */
 export function SupportAiSettings() {
   const { client, t, locale } = useSupport();
   const queryClient = useQueryClient();
@@ -75,6 +83,14 @@ export function SupportAiSettings() {
           onChange={(e) => change({ guidance: e.target.value })}
           placeholder={t("ai.settings.guidancePlaceholder")}
           className="min-h-40"
+        />
+        <GuidanceSuggestions
+          onAccepted={(rule) => {
+            save.reset();
+            // The server added the rule to the saved guidance; the form follows, keeping what's being typed.
+            setForm((current) => current && { ...current, guidance: current.guidance.trim() ? `${current.guidance.trim()}\n${rule}` : rule });
+            queryClient.invalidateQueries({ queryKey: ["support", "ai", "settings"] });
+          }}
         />
       </section>
 
@@ -170,6 +186,241 @@ export function SupportAiSettings() {
         )}
         {sync.error && <p className="text-sm text-destructive">{t("ai.failed")}</p>}
       </section>
+
+      <ApprovedAnswers />
+      <Gaps />
     </div>
+  );
+}
+
+const ticketLink = "text-foreground underline-offset-2 hover:underline tabular-nums";
+
+/** Rules the team's own edits suggest, under the guidance they would join. Nothing is added until someone accepts. */
+function GuidanceSuggestions({ onAccepted }: { onAccepted: (rule: string) => void }) {
+  const { client, t, ticketHref } = useSupport();
+  const queryClient = useQueryClient();
+  const ai = client.ai;
+  const suggestions = useQuery({
+    queryKey: ["support", "ai", "guidance-suggestions"],
+    queryFn: () => ai!.listGuidanceSuggestions!(),
+    enabled: Boolean(ai?.listGuidanceSuggestions && ai.decideGuidanceSuggestion),
+  });
+  const [rules, setRules] = useState<Record<string, string>>({});
+  const decide = useMutation({
+    mutationFn: (input: { id: string; accept: boolean; rule?: string }) => ai!.decideGuidanceSuggestion!(input),
+    onSuccess: (_, input) => {
+      if (input.accept && input.rule) onAccepted(input.rule);
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["support", "ai", "guidance-suggestions"] }),
+  });
+  if (!suggestions.data?.length) return null;
+
+  return (
+    <ul className="space-y-2 pt-1">
+      {suggestions.data.map((suggestion: GuidanceSuggestion) => {
+        const rule = rules[suggestion.id] ?? suggestion.rule;
+        const busy = decide.isPending && decide.variables?.id === suggestion.id;
+        return (
+          <li key={suggestion.id} className="space-y-2 rounded-xl border bg-card p-3">
+            <p className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Sparkles className="size-3.5 text-primary" />
+              {t("ai.guidanceSuggestions.label")}
+            </p>
+            <Textarea
+              dir="auto"
+              value={rule}
+              onChange={(e) => setRules({ ...rules, [suggestion.id]: e.target.value })}
+              aria-label={t("ai.guidanceSuggestions.rule")}
+              className="min-h-0"
+              rows={2}
+            />
+            <p dir="auto" className="text-sm text-muted-foreground">
+              {suggestion.reason}
+              {suggestion.tickets.length > 0 && (
+                <>
+                  {" "}
+                  {t("ai.guidanceSuggestions.seenIn")}{" "}
+                  {suggestion.tickets.map((ticket, index) => (
+                    <span key={ticket.id}>
+                      {index > 0 && ", "}
+                      <Link href={ticketHref(ticket.id)} className={ticketLink}>
+                        #{ticket.number}
+                      </Link>
+                    </span>
+                  ))}
+                  .
+                </>
+              )}
+            </p>
+            <div className="flex items-center gap-2">
+              <Button type="button" size="sm" disabled={!rule.trim() || decide.isPending} onClick={() => decide.mutate({ id: suggestion.id, accept: true, rule: rule.trim() })}>
+                {busy && <Loader2 className="size-4 animate-spin" />}
+                {t("ai.guidanceSuggestions.accept")}
+              </Button>
+              <Button type="button" size="sm" variant="ghost" disabled={decide.isPending} onClick={() => decide.mutate({ id: suggestion.id, accept: false })}>
+                {t("ai.guidanceSuggestions.dismiss")}
+              </Button>
+              {decide.isError && decide.variables?.id === suggestion.id && (
+                <span className="text-sm text-destructive">{decide.error instanceof Error && decide.error.message ? decide.error.message : t("ai.failed")}</span>
+              )}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** The answers the team approved: listed, changed and removed here; saved from replies on the ticket. */
+function ApprovedAnswers() {
+  const { client, t, locale } = useSupport();
+  const queryClient = useQueryClient();
+  const ai = client.ai;
+  const enabled = Boolean(ai?.listApprovedAnswers && ai.saveApprovedAnswer);
+  const answers = useQuery({ queryKey: ["support", "ai", "answers"], queryFn: () => ai!.listApprovedAnswers!(), enabled });
+  const [editing, setEditing] = useState<ApprovedAnswer | "new" | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const remove = useMutation({
+    mutationFn: (id: string) => ai!.deleteApprovedAnswer!({ id }),
+    onSettled: () => {
+      setRemoving(null);
+      queryClient.invalidateQueries({ queryKey: ["support", "ai", "answers"] });
+    },
+  });
+  if (!enabled) return null;
+
+  return (
+    <section className="space-y-2 border-t pt-6">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <h2 className="text-sm font-medium">{t("ai.answers.heading")}</h2>
+          <p className="text-sm text-muted-foreground">{t("ai.answers.help")}</p>
+        </div>
+        <Button type="button" variant="outline" size="sm" onClick={() => setEditing("new")}>
+          <Plus className="size-4" />
+          {t("ai.answers.new")}
+        </Button>
+      </div>
+      {answers.data?.length ? (
+        <ul className="divide-y rounded-xl border bg-card">
+          {answers.data.map((answer) => (
+            <li key={answer.id} className="flex items-center gap-3 px-4 py-3">
+              <div className="min-w-0 flex-1">
+                <p className="flex items-center gap-2 text-sm font-medium">
+                  <bdi className="truncate">{answer.title}</bdi>
+                  {answer.language && (
+                    <span className="shrink-0 rounded-md border px-1.5 py-0.5 text-[11px] font-normal text-muted-foreground">
+                      {t("ai.answers.languageOnly", { language: languageName(answer.language, locale) })}
+                    </span>
+                  )}
+                </p>
+                <p dir="auto" className="truncate text-sm text-muted-foreground">
+                  {answer.text.replace(/\s+/g, " ")}
+                </p>
+              </div>
+              {removing === answer.id ? (
+                <span className="flex shrink-0 items-center gap-1">
+                  <Button type="button" size="sm" variant="destructive" disabled={remove.isPending} onClick={() => remove.mutate(answer.id)}>
+                    {remove.isPending && <Loader2 className="size-4 animate-spin" />}
+                    {t("ai.answers.confirmDelete")}
+                  </Button>
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setRemoving(null)}>
+                    {t("actions.cancel")}
+                  </Button>
+                </span>
+              ) : (
+                <span className="flex shrink-0 items-center">
+                  <Button type="button" size="icon" variant="ghost" className="size-8" onClick={() => setEditing(answer)} aria-label={t("ai.answers.edit", { title: answer.title })}>
+                    <Pencil className="size-4" />
+                  </Button>
+                  {ai?.deleteApprovedAnswer && (
+                    <Button type="button" size="icon" variant="ghost" className="size-8" onClick={() => setRemoving(answer.id)} aria-label={t("ai.answers.delete", { title: answer.title })}>
+                      <Trash2 className="size-4" />
+                    </Button>
+                  )}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : answers.data ? (
+        <p className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">{t("ai.answers.empty")}</p>
+      ) : (
+        <Skeleton className="h-16" />
+      )}
+      <ApprovedAnswerDialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)} answer={editing && editing !== "new" ? editing : undefined} />
+    </section>
+  );
+}
+
+/** What the knowledge is missing: each gap is closed by writing its answer, drafting an article from the tickets, or dismissing it. */
+function Gaps() {
+  const { client, t, locale, ticketHref } = useSupport();
+  const queryClient = useQueryClient();
+  const ai = client.ai;
+  const gaps = useQuery({ queryKey: ["support", "ai", "gaps"], queryFn: () => ai!.listGaps!(), enabled: Boolean(ai?.listGaps) });
+  const [writing, setWriting] = useState<Gap | null>(null);
+  const [drafting, setDrafting] = useState<Gap | null>(null);
+  const dismiss = useMutation({
+    mutationFn: (id: string) => ai!.dismissGap!({ id }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["support", "ai", "gaps"] }),
+  });
+  if (!ai?.listGaps) return null;
+
+  return (
+    <section className="space-y-2 border-t pt-6">
+      <div className="space-y-1">
+        <h2 className="text-sm font-medium">{t("ai.gaps.heading")}</h2>
+        <p className="text-sm text-muted-foreground">{t("ai.gaps.help")}</p>
+      </div>
+      {gaps.data?.length ? (
+        <ul className="divide-y rounded-xl border bg-card">
+          {gaps.data.map((gap) => (
+            <li key={gap.id} className="space-y-2 px-4 py-3">
+              <div>
+                <p dir="auto" className="text-sm font-medium">
+                  {gap.theme}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {gap.count === 1 ? t("ai.gaps.askedOnce") : t("ai.gaps.asked", { count: gap.count })}
+                  {gap.lastSeenAt && <> · {t("ai.gaps.lastSeen", { when: formatWhen(gap.lastSeenAt, locale) })}</>}
+                  {gap.tickets.map((ticket) => (
+                    <span key={ticket.id}>
+                      {" · "}
+                      <Link href={ticketHref(ticket.id)} className={ticketLink} title={ticket.subject ?? undefined}>
+                        #{ticket.number}
+                      </Link>
+                    </span>
+                  ))}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {ai.saveApprovedAnswer && (
+                  <Button type="button" size="sm" variant="outline" onClick={() => setWriting(gap)}>
+                    {t("ai.gaps.write")}
+                  </Button>
+                )}
+                {ai.draftArticle && (
+                  <Button type="button" size="sm" variant="outline" onClick={() => setDrafting(gap)}>
+                    {t("ai.article.draft")}
+                  </Button>
+                )}
+                {ai.dismissGap && (
+                  <Button type="button" size="sm" variant="ghost" disabled={dismiss.isPending} onClick={() => dismiss.mutate(gap.id)}>
+                    {t("ai.gaps.dismiss")}
+                  </Button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : gaps.data ? (
+        <p className="rounded-xl border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">{t("ai.gaps.empty")}</p>
+      ) : (
+        <Skeleton className="h-16" />
+      )}
+      <ApprovedAnswerDialog open={writing !== null} onOpenChange={(open) => !open && setWriting(null)} gap={writing ?? undefined} />
+      {drafting && <ArticleDialog open onOpenChange={(open) => !open && setDrafting(null)} from={{ gapId: drafting.id }} />}
+    </section>
   );
 }

@@ -92,7 +92,8 @@
       "reply_window_closed": "You can only reply within 24 hours of the customer's last message on this channel. Leave a note, or wait for them to write again.",
       "no_channel": "This ticket's channel is no longer set up, so replies can't be sent.",
       "no_recipient": "There's no address to reply to on this channel."
-    }
+    },
+    "replyPlaceholderAnswers": "Write a reply, or type / for an approved answer…"
   },
   "ai": {
     "urgencyLabel": "Urgency:",
@@ -179,6 +180,59 @@
       "sync": "Sync now",
       "save": "Save changes",
       "saved": "Saved"
+    },
+    "answers": {
+      "heading": "Approved answers",
+      "help": "Answers your team wrote once and approved. Suggested replies use them before anything else, and agents insert them by typing / in the reply box.",
+      "new": "New answer",
+      "empty": "No approved answers yet. Save one from any reply you've sent.",
+      "edit": "Edit {title}",
+      "delete": "Delete {title}",
+      "confirmDelete": "Delete",
+      "languageOnly": "{language} only",
+      "saveReply": "Save as approved answer",
+      "saveTitle": "Save as approved answer",
+      "editTitle": "Edit approved answer",
+      "description": "The whole team can insert this answer, and suggested replies use it first.",
+      "fromReplyDescription": "The whole team can insert this answer, and suggested replies use it first. Check that nothing about this customer is left in it.",
+      "preparing": "Taking out this customer's details…",
+      "notGeneralised": "The customer's details couldn't be taken out automatically. Remove them before you save.",
+      "title": "Question it answers",
+      "titlePlaceholder": "When will my payout arrive?",
+      "text": "Answer",
+      "placeholders": "{name}, {company} and {agent} are filled in when the answer is used.",
+      "save": "Save answer",
+      "noMatch": "No approved answer matches.",
+      "language": "Customers who write in",
+      "anyLanguage": "Any language",
+      "newTitle": "New approved answer"
+    },
+    "article": {
+      "draft": "Draft an article",
+      "title": "Draft an article",
+      "description": "Written from how your team answered. Copy it into your docs, or keep it as an approved answer.",
+      "writing": "Writing from your team's replies…",
+      "heading": "Title",
+      "body": "Article in Markdown",
+      "copy": "Copy Markdown",
+      "copied": "Copied"
+    },
+    "guidanceSuggestions": {
+      "label": "Suggested from your team's edits",
+      "rule": "Rule to add",
+      "seenIn": "Seen in",
+      "accept": "Add to guidance",
+      "dismiss": "Dismiss"
+    },
+    "gaps": {
+      "heading": "Unanswered questions",
+      "help": "Questions your knowledge didn't cover, and ones where agents discarded the suggested reply. Updated once a day.",
+      "empty": "Nothing has gone unanswered.",
+      "asked": "Asked in {count} tickets",
+      "askedOnce": "Asked in 1 ticket",
+      "lastSeen": "last asked {when}",
+      "write": "Write an answer",
+      "dismiss": "Dismiss"
     }
   },
   "contact": {

@@ -1,8 +1,11 @@
 import type {
   Agent,
   AiSettings,
+  ApprovedAnswer,
   Customer,
   FileInfo,
+  Gap,
+  GuidanceSuggestion,
   PortalMessage,
   PortalTicket,
   Suggestion,
@@ -24,6 +27,8 @@ import type {
  *
  * The AI here is scripted: suggested replies, summaries and rewrites are written in this file, so
  * the demo works without a model or a key. In your app they come from the model you configure.
+ * So is its memory: the approved answers, the rule suggested from edits and the unanswered
+ * questions are seeded here, and "generalising" a reply swaps the names it knows for placeholders.
  */
 
 export const VIEWER: Agent = { id: "agent_you", name: "Alex Chen" };
@@ -63,6 +68,9 @@ type State = {
   /** The scripted reply in the customer's language, for "Translate to …". */
   localized: Map<string, string>;
   ai: AiSettings;
+  answers: ApprovedAnswer[];
+  guidanceSuggestions: GuidanceSuggestion[];
+  gaps: Gap[];
   messages: Map<string, TimelineMessage[]>;
   events: Map<string, TimelineEvent[]>;
   reads: Map<string, Date>;
@@ -108,6 +116,28 @@ function seed(): State {
         { id: "developer-docs", articles: 118, syncedAt: minutes(190) },
       ],
     },
+    answers: [
+      {
+        id: "ans_admins",
+        title: "How do I add another admin?",
+        text: "Hi {name},\n\nYou can add admins from Settings, then Team: choose Invite and pick the Admin role. They'll get an email to join.",
+        language: null,
+      },
+      {
+        id: "ans_payouts",
+        title: "When will my payout arrive?",
+        text: "Hi {name},\n\nPayouts leave our side every Monday, and banks take up to 3 business days to show them. If yours hasn't arrived by Thursday, reply here and we'll trace it with the bank.",
+        language: null,
+      },
+      {
+        id: "ans_factura",
+        title: "¿Cómo corrijo una factura?",
+        text: "Hola {name}: puede corregir la dirección de una factura desde Facturación, con el botón Editar. La versión corregida se descarga al momento.",
+        language: "es",
+      },
+    ],
+    guidanceSuggestions: [],
+    gaps: [],
     seq: 1040,
     messages: new Map(),
     events: new Map(),
@@ -219,7 +249,7 @@ function seed(): State {
         text: "Hi Daniel! Yes, your Business plan includes extra admins. Go to Settings, then Team, choose Invite and pick the Admin role. They'll get an email to join.",
         reason: null,
         sources: [
-          { type: "knowledge", id: "help-center/team-roles", title: "Team roles" },
+          { type: "answer", id: "answer/ans_admins", title: "How do I add another admin?" },
           { type: "fact", id: "fact:1", title: "Plan" },
         ],
       },
@@ -320,6 +350,25 @@ function seed(): State {
     read: true,
     thread: [{ kind: "inbound", ago: 2000, text: "Buy 3 watches, get 1 free. Limited time!" }],
   });
+
+  // What the team's work has taught so far, pointing at the tickets above.
+  const about = (subject: string) => {
+    const t = state.tickets.find((x) => x.subject === subject)!;
+    return { id: t.id, number: t.number, subject: t.subject };
+  };
+  const payout = about("Payout not received");
+  state.guidanceSuggestions = [
+    {
+      id: "gs_1",
+      rule: "When a payout is late, say when it left our side before explaining how long banks take.",
+      reason: "In 4 of 6 replies about payouts this month, agents moved the payout date to the first line.",
+      tickets: [{ id: payout.id, number: payout.number }],
+    },
+  ];
+  state.gaps = [
+    { id: "gap_annual", theme: "Discount for annual billing", count: 1, lastSeenAt: minutes(48), tickets: [about("Do you offer annual billing?")] },
+    { id: "gap_export", theme: "CSV export stops at 1,000 rows", count: 1, lastSeenAt: minutes(720), tickets: [about("Export to CSV isn't showing all rows")] },
+  ];
   return state;
 }
 
@@ -716,6 +765,75 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
       async syncKnowledge() {
         s.ai.sources = s.ai.sources.map((source) => ({ ...source, syncedAt: new Date() }));
         return thinking({ ok: true });
+      },
+
+      async listApprovedAnswers() {
+        return delay(s.answers.map((answer) => ({ ...answer })));
+      },
+
+      async generaliseAnswer({ ticketId, text }) {
+        const t = ticket(ticketId);
+        const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        let general = text;
+        const first = t.contact.name?.split(" ")[0];
+        const company = customer(t.customerId)?.name;
+        if (company) general = general.replace(new RegExp(escaped(company), "gi"), "{company}");
+        if (first) general = general.replace(new RegExp(`\\b${escaped(first)}\\b`, "g"), "{name}");
+        general = general.replace(/ of \$[\d,]+(?:\.\d+)?/g, "").replace(/#\d{3,}/g, "your order");
+        const summary = s.insights.get(ticketId)?.summary;
+        return thinking({ title: t.subject ?? summary ?? "", text: general, language: s.insights.get(ticketId)?.language ?? null });
+      },
+
+      async saveApprovedAnswer({ id, title, text, language, gapId }) {
+        if (id) s.answers = s.answers.map((answer) => (answer.id === id ? { ...answer, title, text, language } : answer));
+        else s.answers.push({ id: nextId("ans"), title, text, language });
+        if (gapId) s.gaps = s.gaps.filter((gap) => gap.id !== gapId);
+        return delay({ ok: true });
+      },
+
+      async deleteApprovedAnswer({ id }) {
+        s.answers = s.answers.filter((answer) => answer.id !== id);
+        return delay({ ok: true });
+      },
+
+      async listGuidanceSuggestions() {
+        return delay(s.guidanceSuggestions.map((suggestion) => ({ ...suggestion })));
+      },
+
+      async decideGuidanceSuggestion({ id, accept, rule }) {
+        const suggestion = s.guidanceSuggestions.find((x) => x.id === id);
+        s.guidanceSuggestions = s.guidanceSuggestions.filter((x) => x.id !== id);
+        if (accept && suggestion) s.ai = { ...s.ai, guidance: `${s.ai.guidance.trim()}\n${(rule ?? suggestion.rule).trim()}`.trim() };
+        return delay({ ok: true });
+      },
+
+      async listGaps() {
+        return delay(s.gaps.map((gap) => ({ ...gap })));
+      },
+
+      async dismissGap({ id }) {
+        s.gaps = s.gaps.filter((gap) => gap.id !== id);
+        return delay({ ok: true });
+      },
+
+      // The scripted article is the agent's own reply, greeting removed, under the question.
+      async draftArticle(input) {
+        const gap = "gapId" in input ? s.gaps.find((x) => x.id === input.gapId) : undefined;
+        const tickets = (gap ? gap.tickets.map((x) => x.id) : "ticketIds" in input ? input.ticketIds : []).map(ticket);
+        const reply = tickets.flatMap((t) => s.messages.get(t.id)!.filter((m) => m.kind === "outbound")).at(-1);
+        if (!reply) throw new Error("None of these tickets has an answer yet. Answer one first.");
+        if (gap?.id === "gap_export" && reply.authorId !== VIEWER.id) {
+          return thinking({
+            title: "Why does my CSV export stop at 1,000 rows?",
+            markdown:
+              "Exports used to stop at 1,000 rows. We've raised that limit, so a new export includes every row.\n\n## If rows are still missing\n\nRun the export again. If it still stops short, reply to your ticket and we'll take a look.",
+          });
+        }
+        const answer = reply.text.replace(/^(hi|hello|hey|dear|thanks|gracias)\b[^\n.!?]*[,.!]?\s*/i, "").trim();
+        return thinking({
+          title: gap?.theme ?? tickets[0]?.subject ?? "",
+          markdown: `${answer[0]?.toUpperCase() ?? ""}${answer.slice(1)}\n\n## Still not working?\n\nReply to your ticket with what you see, and we'll take a look.`,
+        });
       },
 
       // Voice uses the browser's own speech recognition. Browsers without one record the

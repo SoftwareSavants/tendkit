@@ -78,6 +78,8 @@ export type SupportAiContext = {
   channel(id: string): { kind: Channel["kind"]; maxTextLength: number | null } | null;
   /** The customer's account facts, [] when the directory has none. Never throws. */
   accountFacts(customerId: string): Promise<AccountFact[]>;
+  /** The customer's name from the directory, or null. Never throws. */
+  customerName(customerId: string): Promise<string | null>;
   now: () => Date;
   log: NonNullable<SupportOptions["log"]>;
 };
@@ -272,6 +274,14 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
       return ch ? { kind: ch.kind, maxTextLength: ch.capabilities.maxTextLength } : null;
     },
     accountFacts,
+    customerName: async (customerId) => {
+      try {
+        return (await directory.getCustomers([customerId]))[0]?.name ?? null;
+      } catch (error) {
+        log("warn", "directory.getCustomers failed", { error: String(error) });
+        return null;
+      }
+    },
     now,
     log,
   });

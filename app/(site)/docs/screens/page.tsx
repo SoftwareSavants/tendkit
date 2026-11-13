@@ -137,6 +137,7 @@ export default function Screens() {
           { name: "responseTargetMinutes", type: "number", default: "240", description: "How long a customer may wait before the wait turns red. It turns amber at three quarters." },
           { name: "t", type: "(key, values) => string", default: "English", description: "Translations. See below." },
           { name: "locale", type: "string", default: '"en"', description: "For dates and numbers." },
+          { name: "speechLocale", type: "string", default: "locale", description: 'The language voice listens in when the browser does the listening. Speech recognition wants a region, such as "fr-FR", where a UI locale is often just "fr".' },
         ]}
       />
       <Callout title="Try the props">

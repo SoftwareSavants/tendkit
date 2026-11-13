@@ -39,6 +39,12 @@ export default function Upgrading() {
         When an update changes the support schema, regenerate your migration with Drizzle and review it like any other.
         Tendkit never migrates your database for you.
       </p>
+      <p>
+        Each schema change also ships as a numbered reference migration next to your store, so you can see exactly what
+        an update adds: <code>0001_ai.sql</code> for the AI tables, <code>0002_memory.sql</code> for AI memory (approved
+        answers, corrections, guidance suggestions and gaps, plus two columns on <code>support_ai_settings</code>). Apply
+        the migration before you deploy the updated code.
+      </p>
     </DocsShell>
   );
 }

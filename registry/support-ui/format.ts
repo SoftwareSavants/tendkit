@@ -75,3 +75,32 @@ export function initials(name: string) {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   return ((parts[0]?.[0] ?? "") + (parts.length > 1 ? parts.at(-1)![0] : "")).toUpperCase() || "?";
 }
+
+/**
+ * An approved answer, ready for this ticket: {name}, {company} and {agent} become the customer's
+ * first name, their company and the agent's first name. A placeholder with nothing to fill it is
+ * taken out with the space before it, so "Hi {name}," becomes "Hi,".
+ */
+export function fillPlaceholders(text: string, values: { name?: string | null; company?: string | null; agent?: string | null }) {
+  return text.replace(/([ \t]*)\{(name|company|agent)\}/g, (_, space: string, key: "name" | "company" | "agent") => {
+    const value = values[key]?.trim();
+    return value ? `${space}${value}` : "";
+  });
+}
+
+/** A Markdown article as the plain text a reply is written in: headings, emphasis and link syntax removed. */
+export function markdownToText(markdown: string) {
+  return markdown
+    .replace(/\r\n?/g, "\n")
+    .replace(/^```[^\n]*\n?/gm, "")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, "$1 ($2)")
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1$2")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/^[ \t]*[*+]\s+/gm, "- ")
+    .replace(/^>\s?/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}

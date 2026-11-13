@@ -148,7 +148,7 @@ export type TicketInsight = {
   updatedAt: Date;
 };
 
-export type SuggestionSource = { type: "knowledge" | "fact" | "guidance"; id: string; title: string; url?: string | null };
+export type SuggestionSource = { type: "knowledge" | "answer" | "fact" | "guidance"; id: string; title: string; url?: string | null };
 
 export type SuggestionStatus = "pending" | "used" | "edited" | "discarded" | "stale";
 
@@ -162,5 +162,50 @@ export type Suggestion = {
   reason: string | null;
   sources: SuggestionSource[];
   status: SuggestionStatus;
+  createdAt: Date;
+};
+
+/**
+ * An answer the team wrote once and approved for reuse. Drafts treat it as their most trusted
+ * source, and agents insert it into the reply box as it is.
+ */
+export type ApprovedAnswer = {
+  id: string;
+  /** The question it answers, or a short title. */
+  title: string;
+  /** May hold the placeholders {name}, {company} and {agent}, filled in when it's used. */
+  text: string;
+  /** BCP-47. Set: only for customers writing in this language. Null: for everyone. */
+  language: string | null;
+  /** The ticket it was saved from, when there was one. */
+  ticketId: string | null;
+  createdBy: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+/** A rule the team's own edits suggest adding to the guidance. Nothing changes until someone accepts it. */
+export type GuidanceSuggestion = {
+  id: string;
+  /** The line to add to the guidance. */
+  rule: string;
+  /** What agents kept doing that suggests it. */
+  reason: string;
+  /** Tickets where they did it. */
+  ticketIds: string[];
+  status: "pending" | "accepted" | "dismissed";
+  createdAt: Date;
+};
+
+/** A question the knowledge didn't answer, or one whose draft agents threw away. */
+export type Gap = {
+  id: string;
+  theme: string;
+  status: "open" | "resolved" | "dismissed";
+  /** Tickets that asked it. */
+  count: number;
+  lastSeenAt: Date | null;
+  /** The latest few. */
+  tickets: { id: string; number: number; subject: string | null }[];
   createdAt: Date;
 };

@@ -1,21 +1,22 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Paperclip, Plus, Sparkles, X } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { BookmarkPlus, Loader2, Paperclip, Plus, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useSupport } from "./provider";
-import type { Address, FileInfo, TicketDetail } from "./client";
-import { contactLabel, formatBytes } from "./format";
+import type { Address, ApprovedAnswer, FileInfo, TicketDetail } from "./client";
+import { contactLabel, fillPlaceholders, formatBytes } from "./format";
+import { AnswerPicker, ApprovedAnswerDialog, answerOptionId, matchAnswers } from "./memory";
 import { DraftBar, RefineRow, foreignLanguage, type RefineAction } from "./ai";
 import { VoiceButton, VoicePanel, useVoice, useVoiceEngine, type VoiceIntent } from "./voice";
 
 type Mode = "reply" | "note";
 
 export function SupportComposer({ detail }: { detail: TicketDetail }) {
-  const { client, t, locale } = useSupport();
+  const { client, t, locale, viewerId } = useSupport();
   const queryClient = useQueryClient();
   const ticketId = detail.ticket.id;
   const blocked = detail.replyBlockedReason;
@@ -124,6 +125,49 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
     setHistory((h) => h.slice(0, -1));
   };
 
+  // Approved answers, when the client lists them: "/" at the start of a line opens the list, and the
+  // chosen answer goes in with this customer's name in place of {name}. No model is involved.
+  const answers = useQuery({
+    queryKey: ["support", "ai", "answers"],
+    queryFn: () => ai!.listApprovedAnswers!(),
+    enabled: Boolean(ai?.listApprovedAnswers),
+    staleTime: 60_000,
+  }).data;
+  const hasAnswers = Boolean(answers?.length);
+  const agents = useQuery({ queryKey: ["support", "agents"], queryFn: () => client.listAgents(), staleTime: 5 * 60_000, enabled: hasAnswers });
+  const [slash, setSlash] = useState<{ start: number; end: number; query: string } | null>(null);
+  const [activeAnswer, setActiveAnswer] = useState(0);
+  /** Where the agent closed the list with Escape, so it stays closed while they finish that line. */
+  const closedSlash = useRef<number | null>(null);
+  const trackSlash = (value: string, at: number | null) => {
+    const found = hasAnswers && mode === "reply" && at !== null ? /(^|\n)\/([^\n]*)$/.exec(value.slice(0, at)) : null;
+    const start = found ? found.index + found[1]!.length : null;
+    if (start === null) closedSlash.current = null;
+    const next = found && start !== closedSlash.current ? { start: start!, end: at!, query: found[2]! } : null;
+    if (next?.query !== slash?.query) setActiveAnswer(0);
+    setSlash(next);
+  };
+  const matches = slash ? matchAnswers(answers ?? [], slash.query, detail.insight?.language ?? null) : [];
+  // A line that starts with "/" and goes on without matching anything is just a line.
+  const picking = slash !== null && (matches.length > 0 || slash.query.length <= 30);
+  const firstName = (name: string | null | undefined) => name?.trim().split(/\s+/)[0] ?? null;
+  const chooseAnswer = (answer: ApprovedAnswer) => {
+    if (!slash) return;
+    const filled = fillPlaceholders(answer.text, {
+      name: firstName(detail.contact.name),
+      company: detail.customer?.name,
+      agent: firstName(agents.data?.find((a) => a.id === viewerId)?.name),
+    });
+    const around = `${text.slice(0, slash.start)}${text.slice(slash.end)}`;
+    setText(`${text.slice(0, slash.start)}${filled}${text.slice(slash.end)}`);
+    // An answer put into an empty box replaces the suggestion: the reply no longer starts from it.
+    if (!around.trim()) setDraftId(null);
+    caret.current = slash.start + filled.length;
+    setSlash(null);
+  };
+  /** The reply to save as an approved answer, while its dialog is open. */
+  const [answerFrom, setAnswerFrom] = useState<string | null>(null);
+
   // Voice, when there's a way to listen. An empty reply box takes what's said as notes to write up;
   // one with text takes it as a change to make. Either way the agent can have their words inserted as spoken.
   const { engine, shortcut } = useVoiceEngine();
@@ -215,6 +259,7 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
       setCcEdit(null);
       setDraftId(null);
       setHistory([]);
+      setSlash(null);
     },
     onError: (e) => setError(e instanceof Error && e.message ? e.message : t("errors.send")),
     onSettled: () => {
@@ -334,22 +379,44 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
               {t("ai.noDraft", { reason: suggestion.reason ?? "" })}
             </p>
           )}
-          <Textarea
-            value={text}
-            dir="auto"
-            readOnly={(busy !== null && busy !== "suggest") || voiceOn}
-            onChange={(e) => setText(e.target.value)}
-            onSelect={(e) => (caret.current = e.currentTarget.selectionStart)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSend) {
-                e.preventDefault();
-                send.mutate(null);
-              }
-            }}
-            placeholder={t(mode === "reply" ? "composer.replyPlaceholder" : "composer.notePlaceholder")}
-            className="min-h-28 resize-y border-0 bg-transparent px-4 shadow-none focus-visible:ring-0 dark:bg-transparent"
-            aria-label={t(mode === "reply" ? "composer.reply" : "composer.note")}
-          />
+          <div className="relative">
+            {picking && <AnswerPicker answers={matches} active={activeAnswer} onActive={setActiveAnswer} onChoose={chooseAnswer} />}
+            <Textarea
+              value={text}
+              dir="auto"
+              readOnly={(busy !== null && busy !== "suggest") || voiceOn}
+              onChange={(e) => {
+                setText(e.target.value);
+                trackSlash(e.target.value, e.target.selectionStart);
+              }}
+              onSelect={(e) => {
+                caret.current = e.currentTarget.selectionStart;
+                trackSlash(e.currentTarget.value, e.currentTarget.selectionStart);
+              }}
+              onBlur={() => setSlash(null)}
+              onKeyDown={(e) => {
+                if (picking && e.key === "Escape") {
+                  e.preventDefault();
+                  closedSlash.current = slash.start;
+                  setSlash(null);
+                } else if (picking && matches.length && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                  e.preventDefault();
+                  setActiveAnswer((i) => (i + (e.key === "ArrowDown" ? 1 : matches.length - 1)) % matches.length);
+                } else if (picking && matches.length && (e.key === "Enter" || e.key === "Tab") && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+                  e.preventDefault();
+                  chooseAnswer(matches[activeAnswer] ?? matches[0]!);
+                } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSend) {
+                  e.preventDefault();
+                  send.mutate(null);
+                }
+              }}
+              placeholder={t(mode === "reply" ? (hasAnswers ? "composer.replyPlaceholderAnswers" : "composer.replyPlaceholder") : "composer.notePlaceholder")}
+              className="min-h-28 resize-y border-0 bg-transparent px-4 shadow-none focus-visible:ring-0 dark:bg-transparent"
+              aria-label={t(mode === "reply" ? "composer.reply" : "composer.note")}
+              aria-controls={picking ? "support-answers" : undefined}
+              aria-activedescendant={picking && matches[activeAnswer] ? answerOptionId(matches[activeAnswer]!.id) : undefined}
+            />
+          </div>
           {files.length > 0 && (
             <ul className="flex flex-wrap gap-2 px-4 pb-2">
               {files.map((file) => (
@@ -392,6 +459,20 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
                 </>
               )}
               {canSpeak && busy === null && <VoiceButton voice={voice} shortcut={shortcut} />}
+              {mode === "reply" && ai?.saveApprovedAnswer && text.trim() && !picking && !voiceOn && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-8"
+                  title={t("ai.answers.saveReply")}
+                  aria-label={t("ai.answers.saveReply")}
+                  disabled={busy !== null}
+                  onClick={() => setAnswerFrom(text)}
+                >
+                  <BookmarkPlus className="size-4" />
+                </Button>
+              )}
               {mode === "reply" && canSuggest && !text.trim() && !voiceOn && (
                 <Button type="button" variant="ghost" size="sm" onClick={() => runAi("suggest")} disabled={busy !== null}>
                   {busy === "suggest" ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
@@ -425,6 +506,11 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
           </div>
         </>
       )}
+      <ApprovedAnswerDialog
+        open={answerFrom !== null}
+        onOpenChange={(open) => !open && setAnswerFrom(null)}
+        from={answerFrom !== null ? { ticketId, text: answerFrom } : undefined}
+      />
     </div>
   );
 }

@@ -86,7 +86,7 @@ type Session = {
  * only runs if the agent hasn't cancelled in the meantime.
  */
 export function useVoice({ engine, resolve }: { engine: VoiceEngine | null; resolve: (said: string) => Promise<() => void> }) {
-  const { client, locale } = useSupport();
+  const { client, speechLocale } = useSupport();
   const [phase, setPhase] = useState<VoicePhase>("idle");
   const [transcript, setTranscript] = useState("");
   const [error, setError] = useState<{ kind: VoiceError; message?: string } | null>(null);
@@ -174,7 +174,7 @@ export function useVoice({ engine, resolve }: { engine: VoiceEngine | null; reso
     const Recognition = recognitionConstructor()!;
     const recognition = new Recognition();
     s.recognition = recognition;
-    recognition.lang = locale;
+    recognition.lang = speechLocale;
     recognition.interimResults = true;
     recognition.continuous = !isTouch();
     recognition.onresult = (event) => {

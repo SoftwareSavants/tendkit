@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, ArrowLeft, Ban, Link2, MoreHorizontal, RotateCw, UserPen } from "lucide-react";
+import { AlertCircle, ArrowLeft, Ban, FileText, Link2, MoreHorizontal, RotateCw, UserPen } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,6 +25,7 @@ import { SupportComposer } from "./support-composer";
 import { LinkCustomerDialog } from "./link-customer-dialog";
 import { ChangeContactDialog } from "./change-contact-dialog";
 import { TicketInsightBar, foreignLanguage, languageName, useMessageTranslation } from "./ai";
+import { ApprovedAnswerDialog, ArticleDialog } from "./memory";
 
 /** One ticket: the conversation, the reply box, and the customer next to it. */
 export function SupportTicket({ ticketId }: { ticketId: string }) {
@@ -109,6 +110,7 @@ function TicketControls({ detail, agents }: { detail: TicketDetail; agents: Agen
   const assign = useTicketMutation(id, (assigneeId: string | null) => client.assign({ ticketId: id, assigneeId }));
   const [linking, setLinking] = useState(false);
   const [changingContact, setChangingContact] = useState(false);
+  const [draftingArticle, setDraftingArticle] = useState(false);
   // Controlled, so picking an option closes the menu with Radix and Base UI alike.
   const [statusOpen, setStatusOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
@@ -181,6 +183,12 @@ function TicketControls({ detail, agents }: { detail: TicketDetail; agents: Agen
             <UserPen className="size-4" />
             {t("ticket.changeContact")}
           </DropdownMenuItem>
+          {client.ai?.draftArticle && detail.ticket.status === "solved" && (
+            <DropdownMenuItem onClick={() => setDraftingArticle(true)}>
+              <FileText className="size-4" />
+              {t("ai.article.draft")}
+            </DropdownMenuItem>
+          )}
           {detail.ticket.status === "spam" ? (
             <DropdownMenuItem onClick={() => setStatus.mutate("open")}>
               <RotateCw className="size-4" />
@@ -196,6 +204,7 @@ function TicketControls({ detail, agents }: { detail: TicketDetail; agents: Agen
       </DropdownMenu>
       <LinkCustomerDialog detail={detail} open={linking} onOpenChange={setLinking} />
       <ChangeContactDialog detail={detail} open={changingContact} onOpenChange={setChangingContact} />
+      <ArticleDialog open={draftingArticle} onOpenChange={setDraftingArticle} from={{ ticketIds: [detail.ticket.id] }} />
     </div>
   );
 }
@@ -286,6 +295,7 @@ function MessageCard({
   const [original, setOriginal] = useState(false);
   const retry = useTicketMutation(detail.ticket.id, () => client.retry({ messageId: message.id }));
   const translation = useMessageTranslation(message.id);
+  const [saving, setSaving] = useState(false);
 
   if (message.auto && message.kind === "outbound") {
     return <p className="px-2 py-1 text-center text-xs text-muted-foreground">{t("ticket.autoReplySent")} · {formatWhen(message.createdAt, locale)}</p>;
@@ -306,6 +316,8 @@ function MessageCard({
   const failed = message.deliveryStatus === "failed";
   // Offered only when the customer writes in another language than the agent reads.
   const foreign = client.ai && message.kind === "inbound" ? foreignLanguage(detail, locale) : null;
+  // A reply that reached the customer can become an answer the whole team reuses.
+  const reusable = Boolean(client.ai?.saveApprovedAnswer) && message.kind === "outbound" && !failed && message.text.trim().length > 0;
 
   return (
     <article
@@ -344,8 +356,16 @@ function MessageCard({
         </div>
       )}
 
-      {(hasMore || failed || foreign) && (
+      {(hasMore || failed || foreign || reusable) && (
         <footer className="mt-3 flex flex-wrap items-center gap-3 text-xs">
+          {reusable && (
+            <>
+              <button type="button" className="text-muted-foreground underline underline-offset-2 hover:text-foreground" onClick={() => setSaving(true)}>
+                {t("ai.answers.saveReply")}
+              </button>
+              <ApprovedAnswerDialog open={saving} onOpenChange={setSaving} from={{ ticketId: detail.ticket.id, text: message.text }} />
+            </>
+          )}
           {foreign && (
             <span className="inline-flex items-center gap-2 text-muted-foreground">
               {translation.text !== null && <span>{t("ai.translatedFrom", { language: languageName(foreign, locale) })}</span>}
