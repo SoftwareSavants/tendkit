@@ -717,6 +717,16 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
         s.ai.sources = s.ai.sources.map((source) => ({ ...source, syncedAt: new Date() }));
         return thinking({ ok: true });
       },
+
+      // Voice uses the browser's own speech recognition. Browsers without one record the
+      // microphone, send nothing anywhere and get this transcript back, so voice still shows.
+      ...(typeof window !== "undefined" && ("SpeechRecognition" in window || "webkitSpeechRecognition" in window)
+        ? {}
+        : {
+            async transcribe() {
+              return thinking({ text: "Verification is still pending. Can offer an onboarding call this week." });
+            },
+          }),
     },
   };
 

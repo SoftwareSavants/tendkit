@@ -130,6 +130,36 @@
     "translatedFrom": "Translated from {language}",
     "showUntranslated": "Show original",
     "failed": "That didn't work. Try again.",
+    "voice": {
+      "label": "Voice",
+      "start": "Speak",
+      "stop": "Done",
+      "dismiss": "Dismiss",
+      "waiting": "Waiting for your microphone…",
+      "transcribing": "Transcribing…",
+      "intentLabel": "What to do with what you say",
+      "intent": {
+        "writeUp": "Write it up",
+        "instruction": "Change the reply",
+        "insert": "Insert as spoken"
+      },
+      "hint": {
+        "writeUp": "Say what to tell the customer, in any language. It's written up as a reply in theirs.",
+        "instruction": "Say what to change, such as \"shorter, and mention the call\".",
+        "insert": "Say it the way you want it written."
+      },
+      "applying": {
+        "writeUp": "Writing it up…",
+        "instruction": "Changing the reply…"
+      },
+      "errors": {
+        "denied": "Microphone access is blocked. Allow it for this site in your browser's settings, then try again.",
+        "noMicrophone": "No microphone was found. Connect one and try again.",
+        "unavailable": "Speech recognition isn't available right now. Check your connection and try again.",
+        "nothing": "Nothing was heard. Check your microphone and try again.",
+        "transcribe": "Your recording couldn't be transcribed. Try again."
+      }
+    },
     "settings": {
       "guidance": "Guidance",
       "guidanceHelp": "How your team answers: tone, policies, what never to promise. Every suggested reply follows it.",

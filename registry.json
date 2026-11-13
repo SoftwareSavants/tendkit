@@ -416,6 +416,11 @@
           "target": "~/components/support/ai.tsx"
         },
         {
+          "path": "registry/support-ui/voice.tsx",
+          "type": "registry:file",
+          "target": "~/components/support/voice.tsx"
+        },
+        {
           "path": "registry/support-ui/support-ai-settings.tsx",
           "type": "registry:file",
           "target": "~/components/support/support-ai-settings.tsx"

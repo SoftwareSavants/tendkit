@@ -1,4 +1,4 @@
-import { generateText, jsonSchema, Output, type LanguageModel, type SystemModelMessage } from "ai";
+import { generateText, jsonSchema, Output, transcribe, type LanguageModel, type SystemModelMessage, type TranscriptionModel } from "ai";
 import type { AiSettings, AiStore, InsightRow } from "./ai-store";
 import type { KnowledgeSource } from "./knowledge";
 import { SupportError, type SupportAiContext, type SupportAiPlugin } from "./service";
@@ -35,7 +35,20 @@ export type SupportAiOptions = {
   cache?: SystemModelMessage["providerOptions"];
   /** Characters of knowledge a prompt may carry. Beyond it, only the articles closest to the conversation go in. */
   knowledgeBudget?: number;
+  /**
+   * Speech to text for voice in the reply box: `openai.transcription("gpt-4o-transcribe")`, or any
+   * other AI SDK transcription model. Without it, the reply box uses the browser's own speech
+   * recognition where there is one.
+   */
+  transcriptionModel?: TranscriptionModel;
+  /**
+   * Provider options for each transcription. The AI SDK has no shared language setting, so a
+   * language hint goes to your provider here: `({ language }) => ({ openai: { ...(language ? { language } : {}) } })`.
+   */
+  transcriptionOptions?: (input: { language?: string }) => TranscriptionProviderOptions;
 };
+
+type TranscriptionProviderOptions = Parameters<typeof transcribe>[0]["providerOptions"];
 
 export type RefineInstruction = "shorter" | "friendlier" | "formal" | "translate" | { custom: string };
 
@@ -47,6 +60,8 @@ const URGENCIES: Urgency[] = ["urgent", "high", "normal", "low"];
 const MOODS: Mood[] = ["calm", "confused", "frustrated", "angry"];
 const MAX_ATTEMPTS = 3;
 const DAY = 86_400_000;
+/** Two minutes of speech is under 2 MB from any browser's recorder. */
+const MAX_AUDIO_BYTES = 10 * 1024 * 1024;
 
 export function supportAi(options: SupportAiOptions) {
   return { attach: (context: SupportAiContext) => createEngine(options, context) } satisfies SupportAiPlugin;
@@ -332,7 +347,7 @@ function createEngine(options: SupportAiOptions, ctx: SupportAiContext) {
     async refine(input: { ticketId: string; text: string; instruction: RefineInstruction; language?: string }): Promise<{ text: string }> {
       const text = input.text.trim();
       if (!text) throw new SupportError("invalid", "Write something first.");
-      const custom = typeof input.instruction === "object" ? input.instruction.custom.trim().slice(0, 500) : null;
+      const custom = typeof input.instruction === "object" ? input.instruction.custom.trim().slice(0, 2000) : null;
       if (typeof input.instruction === "object" && !custom) throw new SupportError("invalid", "Say what to change.");
       const { ticket, settings, channel } = await loadTicket(input.ticketId);
       const insight = await store.getInsight(ticket.id);
@@ -407,6 +422,26 @@ function createEngine(options: SupportAiOptions, ctx: SupportAiContext) {
       const text = result.text.trim();
       if (!text) throw new SupportError("invalid", "Couldn't translate this. Try again.");
       return { text };
+    },
+
+    /**
+     * What an agent said, as text, for the reply box. The audio goes to the transcription model
+     * and nowhere else: it is never stored. `language` (BCP-47) is a hint for `transcriptionOptions`;
+     * without one, the provider detects the language.
+     */
+    async transcribe(input: { audio: Uint8Array | ArrayBuffer | Blob; language?: string }): Promise<{ text: string; language: string | null }> {
+      if (!options.transcriptionModel) throw new SupportError("invalid", "Voice needs a transcription model.");
+      const audio = input.audio instanceof Uint8Array ? input.audio : new Uint8Array(input.audio instanceof ArrayBuffer ? input.audio : await input.audio.arrayBuffer());
+      if (!audio.byteLength) throw new SupportError("invalid", "The recording is empty.");
+      if (audio.byteLength > MAX_AUDIO_BYTES) throw new SupportError("too_large", "Keep recordings under two minutes.");
+      const language = input.language?.trim() || undefined;
+      const result = await transcribe({
+        model: options.transcriptionModel,
+        audio,
+        providerOptions: options.transcriptionOptions?.({ ...(language ? { language } : {}) }),
+        maxRetries: 1,
+      });
+      return { text: result.text.replace(/\s+/g, " ").trim(), language: result.language ?? null };
     },
 
     async discardSuggestion(id: string) {

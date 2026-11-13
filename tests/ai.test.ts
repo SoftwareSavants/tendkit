@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MockLanguageModelV4 } from "ai/test";
+import { MockLanguageModelV4, MockTranscriptionModelV4 } from "ai/test";
 import { supportAi, type SupportAiOptions } from "../registry/support/ai";
 import type { KnowledgeArticle, KnowledgeSource } from "../registry/support/knowledge";
 import { createSupport, type SupportOptions } from "../registry/support/service";
@@ -506,6 +506,50 @@ describe("refining", () => {
     expect(await t.support.ai.translate({ messageId })).toEqual({ text: "Where is my payout?" });
     expect(t.fast.calls.at(-1)!.prompt).toContain("Translate into this language: en-GB.");
     expect(t.fast.calls.at(-1)!.prompt).toContain("¿Dónde está mi pago?");
+  });
+});
+
+describe("voice", () => {
+  /** A transcription model that remembers what it was sent. */
+  function listening(text: string) {
+    const calls: { bytes: number; mediaType: string; providerOptions: unknown }[] = [];
+    const model = new MockTranscriptionModelV4({
+      doGenerate: async (options) => {
+        calls.push({ bytes: options.audio.length, mediaType: options.mediaType, providerOptions: options.providerOptions });
+        return { text, segments: [], language: "fr", durationInSeconds: 4, warnings: [], response: { timestamp: new Date(), modelId: "stt-1", headers: {} } };
+      },
+    });
+    return { model, calls };
+  }
+  // The first bytes of a WAV file, which is how the AI SDK tells what it was handed.
+  const wav = () => new Uint8Array([0x52, 0x49, 0x46, 0x46, 0x24, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, ...new Array<number>(64).fill(0)]);
+
+  it("transcribes a recording in any of the shapes a route receives, and passes the language hint to the provider", async () => {
+    const stt = listening("  dites-lui que la vérification\nest en cours  ");
+    const t = await setupAi({
+      ai: { transcriptionModel: stt.model, transcriptionOptions: ({ language }) => ({ acme: { ...(language ? { language } : {}) } }) },
+    });
+    expect(await t.support.ai.transcribe({ audio: wav() })).toEqual({ text: "dites-lui que la vérification est en cours", language: "fr" });
+    expect(stt.calls[0]).toEqual({ bytes: 76, mediaType: "audio/wav", providerOptions: { acme: {} } });
+
+    await t.support.ai.transcribe({ audio: new Blob([wav()], { type: "audio/wav" }), language: " fr " });
+    await t.support.ai.transcribe({ audio: wav().buffer as ArrayBuffer });
+    expect(stt.calls.map((c) => c.bytes)).toEqual([76, 76, 76]);
+    expect(stt.calls[1]!.providerOptions).toEqual({ acme: { language: "fr" } });
+    // Speech goes to the transcription model only: no language model saw it.
+    expect(t.fast.calls).toHaveLength(0);
+    expect(t.main.calls).toHaveLength(0);
+  });
+
+  it("refuses empty and oversized recordings before they reach the provider, and says so when no model is set", async () => {
+    const stt = listening("unused");
+    const t = await setupAi({ ai: { transcriptionModel: stt.model } });
+    await expect(t.support.ai.transcribe({ audio: new Uint8Array(0) })).rejects.toThrow("The recording is empty.");
+    await expect(t.support.ai.transcribe({ audio: new Uint8Array(10 * 1024 * 1024 + 1) })).rejects.toMatchObject({ code: "too_large" });
+    expect(stt.calls).toHaveLength(0);
+
+    const without = await setupAi();
+    await expect(without.support.ai.transcribe({ audio: wav() })).rejects.toThrow("Voice needs a transcription model.");
   });
 });
 

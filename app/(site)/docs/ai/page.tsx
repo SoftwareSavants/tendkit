@@ -74,6 +74,35 @@ supportAi({ model, store, defer: (work) => ctx.waitUntil(work) });
 import { after } from "next/server";
 supportAi({ model, store, defer: (work) => after(() => work) });`;
 
+const VOICE = `import { openai } from "@ai-sdk/openai"; // or elevenlabs, deepgram, groq…
+
+supportAi({
+  model,
+  store,
+  transcriptionModel: openai.transcription("gpt-4o-transcribe"),
+  // Optional. The AI SDK has no shared language setting, so a hint goes to your provider here.
+  transcriptionOptions: ({ language }) => ({ openai: { ...(language ? { language } : {}) } }),
+});`;
+
+const VOICE_ROUTE = `// app/api/support/transcribe/route.ts
+export async function POST(request: Request) {
+  await requireAgent(request);
+  const audio = (await request.formData()).get("audio") as File;
+  return Response.json(await support().ai.transcribe({ audio }));
+}
+
+// app/admin/support/client.ts
+ai: {
+  // …the methods above
+  async transcribe({ audio }) {
+    const body = new FormData();
+    body.set("audio", audio);
+    const response = await fetch("/api/support/transcribe", { method: "POST", body });
+    if (!response.ok) throw new Error("Transcription failed");
+    return response.json();
+  },
+},`;
+
 const API = `case "listTickets":
   return Response.json(
     await s.listTickets(
@@ -143,6 +172,7 @@ export default function Ai() {
         { id: "account-facts", title: "Account facts" },
         { id: "when-it-runs", title: "When it runs" },
         { id: "screens", title: "Screens" },
+        { id: "voice", title: "Voice" },
         { id: "methods", title: "Methods" },
         { id: "privacy", title: "Privacy" },
       ]}
@@ -201,7 +231,8 @@ export default function Ai() {
         </li>
         <li>
           <strong>Helps with the wording.</strong> In the reply box: Shorter, Friendlier, More formal, Translate, any
-          instruction you type, and Undo. &quot;Write it up&quot; turns an agent&apos;s rough notes into the reply.
+          instruction you type or <a href="#voice">say</a>, and Undo. &quot;Write it up&quot; turns an agent&apos;s rough notes
+          into the reply.
           Customers&apos; messages in another language can be translated in place.
         </li>
         <li>
@@ -226,6 +257,8 @@ export default function Ai() {
           { name: "agentLanguage", type: "string", default: '"en"', description: "The language your agents read (BCP-47), for summaries, reasons and translations." },
           { name: "knowledgeBudget", type: "number", default: "120000", description: "Characters of knowledge a prompt may carry. Past it, only the articles closest to the conversation are sent." },
           { name: "cache", type: "providerOptions", description: "Set on the shared prompt prefix, for providers that only cache a prefix when it's marked." },
+          { name: "transcriptionModel", type: "TranscriptionModel", description: "Speech to text for voice in the reply box. Without it, voice uses the browser's own speech recognition. See Voice." },
+          { name: "transcriptionOptions", type: "({ language? }) => providerOptions", description: "Provider options for each transcription, such as a language hint." },
         ]}
       />
 
@@ -296,6 +329,65 @@ export default function Ai() {
         the AI is scripted.
       </p>
 
+      <H2 id="voice">Voice</H2>
+      <p>
+        The reply box has one microphone button, so an agent can speak instead of type, in any language. What happens
+        with their words follows from what&apos;s in the box:
+      </p>
+      <ul>
+        <li>
+          <strong>An empty reply box takes notes.</strong> &quot;Tell her verification is pending, offer the onboarding
+          call&quot; goes through Write it up and comes back as a finished reply in the customer&apos;s language and your
+          tone.
+        </li>
+        <li>
+          <strong>A reply box with text takes a change.</strong> &quot;Shorter, and mention the call&quot; is applied to
+          the reply like a typed instruction, and Undo brings the earlier text back.
+        </li>
+        <li>
+          <strong>Insert as spoken</strong> puts the words in as text at the cursor, with no rewrite. The choice sits next
+          to the transcript while the agent speaks and is remembered in that browser. Internal notes always work this
+          way.
+        </li>
+      </ul>
+      <p>
+        While listening, the agent sees the input level, the time against the two-minute limit, and the transcript, which
+        stays in view while it&apos;s applied. Done (or the button again) applies it, Escape cancels at any point, and{" "}
+        <code>⌘ Shift Space</code> (<code>Ctrl Shift Space</code> on Windows and Linux) starts and stops without the mouse. At two minutes the recording stops and is applied. If the model call
+        fails, the transcript is kept so the agent can try again without repeating themselves.
+      </p>
+      <p>Where speech becomes text depends on your setup:</p>
+      <ul>
+        <li>
+          <strong>With a transcription model.</strong> Set <code>transcriptionModel</code> to any AI SDK transcription
+          model (OpenAI, ElevenLabs, Deepgram, Groq and others) and add <code>transcribe</code> to your client. The
+          browser records, your server passes the audio to the provider, and the provider detects the language.
+        </li>
+        <li>
+          <strong>Without one.</strong> The reply box uses the browser&apos;s own speech recognition (the Web Speech API,
+          in Chrome, Edge and Safari), listening in the <code>locale</code> you give <code>SupportProvider</code>. This is
+          what you get with a provider that has no speech to text, such as Anthropic.
+        </li>
+        <li>
+          <strong>With neither</strong> (Firefox without a transcription model, for example), there is no microphone
+          button.
+        </li>
+      </ul>
+      <Code title="lib/support/index.ts" lang="ts" code={VOICE} />
+      <Code title="Sending the recording" lang="ts" code={VOICE_ROUTE} />
+      <Callout title="Use a transcription model for languages other than English">
+        Browser speech recognition listens in one language at a time and is noticeably weaker outside English. For teams
+        that speak Arabic, French or a mix of languages, a transcription model is far more accurate and detects the
+        language on its own.
+      </Callout>
+      <p>
+        Audio is never stored: the recording lives in the browser&apos;s memory until it&apos;s sent, and{" "}
+        <code>ai.transcribe</code> hands it to the provider and returns the text. Recordings are about half a megabyte
+        for two minutes; <code>ai.transcribe</code> refuses anything over 10 MB. With browser speech recognition, the
+        browser decides where audio is processed, and Chrome sends it to Google. If the microphone is blocked, missing or
+        hears nothing, the reply box says so and how to fix it.
+      </p>
+
       <H2 id="methods">Methods</H2>
       <p>
         <code>support().ai</code> exists only when <code>ai</code> is configured.
@@ -308,6 +400,7 @@ export default function Ai() {
           { name: "refine", type: "({ ticketId, text, instruction, language? }) => { text }", description: 'instruction is "shorter", "friendlier", "formal", "translate" or { custom }. Translate goes to the customer\'s language unless you pass one.' },
           { name: "writeUp", type: "({ ticketId, notes }) => { text }", description: "An agent's notes as a finished reply, with the main model." },
           { name: "translate", type: "({ messageId, to? }) => { text }", description: "A message in another language; to defaults to agentLanguage." },
+          { name: "transcribe", type: "({ audio, language? }) => { text, language }", description: "Speech to text with transcriptionModel. audio is a Blob, Uint8Array or ArrayBuffer of up to 10 MB; language is a hint passed to transcriptionOptions. Nothing is stored." },
           { name: "discardSuggestion", type: "(id)", description: "Records that the agent didn't want it." },
           { name: "setInsight", type: "({ ticketId, actorId, topic?, urgency? })", description: "An agent's correction. Kept on later messages and recorded on the timeline." },
         ]}
@@ -323,7 +416,8 @@ export default function Ai() {
         With AI on, the conversation on a ticket (customer messages, your replies and internal notes), that
         customer&apos;s account facts, your guidance and your knowledge articles are sent to the model provider you
         configure, under your own account and its terms. Tendkit has no service of its own and sends nothing anywhere
-        else. Attachments are never sent.
+        else. Attachments are never sent. Voice recordings go to your transcription provider, or to the browser&apos;s
+        speech service when you haven&apos;t set one, and are never stored.
       </Callout>
       <p>
         Insights, suggestions and their outcomes are stored in your database, in <code>support_ticket_insights</code> and{" "}

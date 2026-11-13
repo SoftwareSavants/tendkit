@@ -10,6 +10,7 @@ import { useSupport } from "./provider";
 import type { Address, FileInfo, TicketDetail } from "./client";
 import { contactLabel, formatBytes } from "./format";
 import { DraftBar, RefineRow, foreignLanguage, type RefineAction } from "./ai";
+import { VoiceButton, VoicePanel, useVoice, useVoiceEngine, type VoiceIntent } from "./voice";
 
 type Mode = "reply" | "note";
 
@@ -123,6 +124,76 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
     setHistory((h) => h.slice(0, -1));
   };
 
+  // Voice, when there's a way to listen. An empty reply box takes what's said as notes to write up;
+  // one with text takes it as a change to make. Either way the agent can have their words inserted as spoken.
+  const { engine, shortcut } = useVoiceEngine();
+  const caret = useRef<number | null>(null);
+  const [plainVoice, setPlainVoice] = useState(false);
+  useEffect(() => {
+    try {
+      setPlainVoice(localStorage.getItem(PLAIN_VOICE) === "1");
+    } catch {
+      // No storage: the choice lasts for this ticket.
+    }
+  }, []);
+  const smartIntent: VoiceIntent | null = mode !== "reply" ? null : text.trim() ? "instruction" : "writeUp";
+  const voiceIntents: VoiceIntent[] = smartIntent ? [smartIntent, "insert"] : ["insert"];
+  const voiceIntent: VoiceIntent = smartIntent && !plainVoice ? smartIntent : "insert";
+  const chooseVoiceIntent = (intent: VoiceIntent) => {
+    setPlainVoice(intent === "insert");
+    try {
+      localStorage.setItem(PLAIN_VOICE, intent === "insert" ? "1" : "0");
+    } catch {
+      // See above.
+    }
+  };
+  const voice = useVoice({
+    engine: ai ? engine : null,
+    async resolve(said) {
+      const before = text;
+      if (voiceIntent === "insert") {
+        const at = Math.min(caret.current ?? before.length, before.length);
+        const head = before.slice(0, at);
+        const tail = before.slice(at);
+        const inserted = `${head}${head && !/\s$/.test(head) ? " " : ""}${said}`;
+        return () => {
+          if (before.trim()) setHistory((h) => [...h, before]);
+          setText(`${inserted}${tail && !/^\s/.test(tail) ? " " : ""}${tail}`);
+          caret.current = inserted.length;
+        };
+      }
+      const result =
+        voiceIntent === "writeUp"
+          ? await ai!.writeUp({ ticketId, notes: said })
+          : await ai!.refine({ ticketId, text: before, instruction: { custom: said } });
+      return () => {
+        setHistory((h) => [...h, before]);
+        setText(result.text);
+      };
+    },
+  });
+  const voiceOn = voice.phase !== "idle";
+  const canSpeak = Boolean(ai && engine) && !(mode === "reply" && blocked);
+  const voiceKeys = useRef<(event: KeyboardEvent) => void>(() => {});
+  useEffect(() => {
+    voiceKeys.current = (event) => {
+      if (event.key === "Escape" && voiceOn) {
+        event.preventDefault();
+        voice.cancel();
+      } else if (event.code === "Space" && event.shiftKey && (event.metaKey || event.ctrlKey) && !event.repeat) {
+        event.preventDefault();
+        if (voice.phase === "listening") voice.stop();
+        else if (busy === null && !send.isPending) voice.start();
+      }
+    };
+  });
+  useEffect(() => {
+    if (!canSpeak) return;
+    const onKey = (event: KeyboardEvent) => voiceKeys.current(event);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [canSpeak]);
+
   const send = useMutation({
     mutationFn: (status: "waiting" | "solved" | null) => {
       const attachmentIds = files.map((f) => f.id);
@@ -171,7 +242,7 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
   };
 
   const tooLong = maxLength !== null && text.length > maxLength;
-  const canSend = text.trim().length > 0 && !tooLong && uploading === 0 && !send.isPending && busy === null && (mode === "note" || !blocked);
+  const canSend = text.trim().length > 0 && !tooLong && uploading === 0 && !send.isPending && busy === null && !voiceOn && (mode === "note" || !blocked);
 
   return (
     <div className={cn("rounded-xl border bg-card", mode === "note" && "border-amber-300/60 dark:border-amber-500/30")}>
@@ -182,6 +253,7 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
             type="button"
             role="tab"
             aria-selected={mode === m}
+            disabled={voiceOn}
             onClick={() => setMode(m)}
             className={cn(
               "-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors",
@@ -265,8 +337,9 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
           <Textarea
             value={text}
             dir="auto"
-            readOnly={busy !== null && busy !== "suggest"}
+            readOnly={(busy !== null && busy !== "suggest") || voiceOn}
             onChange={(e) => setText(e.target.value)}
+            onSelect={(e) => (caret.current = e.currentTarget.selectionStart)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && canSend) {
                 e.preventDefault();
@@ -296,7 +369,8 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
             </ul>
           )}
           {error && <p className="px-4 pb-2 text-sm text-destructive">{error}</p>}
-          {ai && mode === "reply" && (text.trim() || history.length > 0) && (
+          {canSpeak && <VoicePanel voice={voice} intent={voiceIntent} intents={voiceIntents} onIntent={chooseVoiceIntent} />}
+          {ai && mode === "reply" && !voiceOn && (text.trim() || history.length > 0) && (
             <RefineRow
               busy={busy}
               onRun={runAi}
@@ -317,7 +391,8 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
                   </Button>
                 </>
               )}
-              {mode === "reply" && canSuggest && !text.trim() && (
+              {canSpeak && busy === null && <VoiceButton voice={voice} shortcut={shortcut} />}
+              {mode === "reply" && canSuggest && !text.trim() && !voiceOn && (
                 <Button type="button" variant="ghost" size="sm" onClick={() => runAi("suggest")} disabled={busy !== null}>
                   {busy === "suggest" ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
                   {t("ai.suggest")}
@@ -354,4 +429,5 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
   );
 }
 
+const PLAIN_VOICE = "tendkit:voice:plain";
 const EMAIL = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/;

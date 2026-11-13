@@ -155,6 +155,11 @@ export interface SupportAiClient {
   getSettings(): Promise<AiSettings>;
   updateSettings(input: Partial<Pick<AiSettings, "guidance" | "topics" | "draftOnArrival">>): Promise<unknown>;
   syncKnowledge(): Promise<unknown>;
+  /**
+   * What the agent said, as text: send the recording to `support.ai.transcribe` on your server.
+   * Leave it off and the reply box uses the browser's own speech recognition where there is one.
+   */
+  transcribe?(input: { audio: Blob; language?: string }): Promise<{ text: string }>;
 }
 
 export interface SupportClient {
