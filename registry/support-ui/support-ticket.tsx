@@ -507,8 +507,9 @@ function CustomerSidebar({ detail }: { detail: TicketDetail }) {
           <dl className="mt-2 space-y-1.5 text-sm">
             {detail.accountFacts.map((fact) => (
               <div key={fact.label} className="flex justify-between gap-3">
-                <dt className="shrink-0 text-muted-foreground">{fact.label}</dt>
-                <dd dir="auto" className="min-w-0 text-end break-words tabular-nums">
+                <dt className="min-w-0 text-muted-foreground">{fact.label}</dt>
+                {/* The value keeps at least 60% of the row, so a long label wraps instead of squeezing it to a letter a line. */}
+                <dd dir="auto" className="max-w-[60%] shrink-0 text-end break-words tabular-nums">
                   {fact.url ? (
                     <a href={fact.url} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
                       {fact.value}

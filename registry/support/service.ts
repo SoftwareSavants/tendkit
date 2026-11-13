@@ -137,7 +137,7 @@ export interface SupportAiEngine<Api = unknown> {
   /** The portal's Ask box. The service checks who is asking; the engine answers for that customer only. */
   selfServe: {
     enabled(): Promise<boolean>;
-    ask(input: { customerId: string; userId: string; question: string; sessionId?: string | null }): Promise<AskResult>;
+    ask(input: { customerId: string; userId: string; question: string; sessionId?: string | null; /** The language the customer uses the product in, for the labels the answer names. */ language?: string | null }): Promise<AskResult>;
     rate(input: { customerId: string; userId: string; sessionId: string; helpful: boolean }): Promise<void>;
     /** What a hand-off carries to the ticket: the question as its subject and message, and the note for the agent. */
     handOff(input: { customerId: string; userId: string; sessionId: string }): Promise<{ subject: string; text: string; note: string }>;
@@ -1781,7 +1781,7 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
      * the browser: they decide whose account is read. Answers "handoff" when it can't answer, or
      * when the customer asks for a person.
      */
-    async ask(input: { customerId: string; userId: string; question: string; sessionId?: string | null }): Promise<AskResult> {
+    async ask(input: { customerId: string; userId: string; question: string; sessionId?: string | null; /** The language the customer uses the product in, for the labels the answer names. */ language?: string | null }): Promise<AskResult> {
       if (!input.customerId || !input.userId) throw new SupportError("forbidden", "Sign in to ask a question.");
       if (!ai || !(await askEnabled())) throw new SupportError("invalid", "Instant answers aren't available right now.");
       return ai.selfServe.ask(input);

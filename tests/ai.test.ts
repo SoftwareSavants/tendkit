@@ -57,6 +57,30 @@ describe("understanding and drafting", () => {
     expect(second!.prompt).not.toContain("$1,240.00");
   });
 
+  it("names screens and buttons the way the customer sees them in their language", async () => {
+    const fr = { "Payout settings": "Paramètres de versement", Settings: "Paramètres", "Get Verified": "Se faire vérifier", Webhooks: "Webhooks FR" };
+    const asked: string[] = [];
+    const t = await setupAi({
+      fast: () => ({ ...UNDERSTOOD, language: "fr" }),
+      ai: { interfaceLabels: (language) => (asked.push(language), language.startsWith("fr") ? fr : null) },
+      knowledge: [{ id: "docs", load: async () => [{ id: "payouts.md", title: "Payout timing", text: "Add your IBAN under Settings → Payout settings." }] }],
+    });
+    await t.receive({ text: "Bonjour, où est mon versement ?" });
+    await t.support.runScheduled();
+    const prompt = t.main.calls[0]!.prompt;
+    // Only the labels this draft's articles, guidance, facts or conversation mention, longest first.
+    expect(prompt).toContain('<interface_labels language="fr">\n<label for="Payout settings">Paramètres de versement</label>\n<label for="Settings">Paramètres</label>\n</interface_labels>');
+    expect(prompt).not.toContain("Se faire vérifier");
+    expect(asked).toEqual(["fr"]);
+  });
+
+  it("leaves labels out when the reply's language has none", async () => {
+    const t = await setupAi({ ai: { interfaceLabels: () => null } });
+    await t.receive();
+    await t.support.runScheduled();
+    expect(t.main.calls[0]!.prompt).not.toContain("interface_labels");
+  });
+
   it("runs through defer when it's given, without waiting for the schedule", async () => {
     const work: Promise<unknown>[] = [];
     const t = await setupAi({ ai: { defer: (p) => void work.push(p) } });

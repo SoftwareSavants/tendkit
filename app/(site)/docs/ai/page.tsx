@@ -53,6 +53,18 @@ const policies: KnowledgeSource = {
   load: async () => (await cms.list("policy")).map((p) => ({ id: p.slug, title: p.title, url: p.url, text: p.body })),
 };`;
 
+const LABELS = `import en from "@/messages/en.json";
+import fr from "@/messages/fr.json";
+import { labelsFromMessages } from "@/lib/support/knowledge";
+
+// "Get Verified" → "Se faire vérifier", for every short label your app translates.
+const labels = { fr: labelsFromMessages(en, fr, { exclude: ["marketing", "admin"] }) };
+
+supportAi({
+  // ...
+  interfaceLabels: (language) => labels[language.split("-")[0] as keyof typeof labels],
+});`;
+
 const FACTS = `export const directory: SupportDirectory = {
   // …identify, searchCustomers, getCustomers, listAgents
 
@@ -434,6 +446,7 @@ export default function Ai() {
           { name: "selfServe", type: "false | { maxPerHour?, maxQuestions?, quietHours? }", description: <>Caps for the portal&apos;s Ask box (20 questions a customer an hour, 8 a conversation), which answers nothing until your team switches it on in AI settings. false removes it. See <Link href="/docs/proactive#self-serve">Self-serve</Link>.</> },
           { name: "defer", type: "(work: Promise) => void", description: "Runs the model calls after the webhook has answered. Without it they run in the next runScheduled." },
           { name: "agentLanguage", type: "string", default: '"en"', description: "The language your agents read (BCP-47), for summaries, reasons and translations." },
+          { name: "interfaceLabels", type: "(language) => Record<string, string> | null", description: "The labels customers see in a reply's language, keyed by their name in your docs, for a product that's translated when its docs aren't. See Knowledge." },
           { name: "knowledgeBudget", type: "number", default: "120000", description: "Characters of knowledge a prompt may carry. Past it, only the articles closest to the conversation are sent." },
           { name: "cache", type: "providerOptions", description: "Set on the shared prompt prefix, for providers that only cache a prefix when it's marked." },
           { name: "transcriptionModel", type: "TranscriptionModel", description: "Speech to text for voice in the reply box. Without it, voice uses the browser's own speech recognition. See Voice." },
@@ -471,6 +484,15 @@ export default function Ai() {
         On Cloudflare Workers and similar runtimes, use <code>docsFromUrl</code> with a file you publish, or import your
         Markdown as strings at build time and pass them to <code>docsFromFiles</code>.
       </Callout>
+      <H3 id="interface-labels">Docs in one language, a product in several</H3>
+      <p>
+        When your app is translated but your docs aren&apos;t, a French reply written from English docs tells the
+        customer to click <em>Get Verified</em> on a screen that says <em>Se faire vérifier</em>. Give{" "}
+        <code>interfaceLabels</code> the labels from your translation files and replies name every screen, tab and button
+        the way the customer sees it. Each prompt carries only the labels its articles, guidance, account facts and
+        conversation mention.
+      </p>
+      <Code lang="ts" code={LABELS} />
 
       <H2 id="account-facts">Account facts</H2>
       <p>

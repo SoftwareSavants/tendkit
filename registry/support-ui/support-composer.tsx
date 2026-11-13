@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookmarkPlus, Loader2, Paperclip, Plus, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -24,10 +24,21 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
   const blocked = detail.replyBlockedReason;
   const [mode, setMode] = useState<Mode>(blocked ? "note" : "reply");
   const [text, setText] = useState("");
+  // The box grows with what's in it, up to 60% of the screen, so a whole draft reads and edits in place.
+  useLayoutEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    const scrollY = window.scrollY;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight + 2, Math.round(window.innerHeight * 0.6))}px`;
+    // Shrinking to measure can scroll the page; put it back.
+    if (window.scrollY !== scrollY) window.scrollTo({ top: scrollY });
+  }, [text]);
   const [files, setFiles] = useState<FileInfo[]>([]);
   const [uploading, setUploading] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
 
   const limits = detail.channel?.capabilities;
   const maxLength = mode === "reply" ? limits?.maxTextLength ?? null : null;
@@ -77,6 +88,7 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
     setText(draft.text ?? "");
     setDraftId(draft.id);
     setMode("reply");
+    requestAnimationFrame(() => box.current?.focus());
   };
   // A suggestion fills an empty reply box once. Text the agent already wrote is never replaced.
   useEffect(() => {
@@ -411,6 +423,7 @@ export function SupportComposer({ detail }: { detail: TicketDetail }) {
           <div className="relative">
             {picking && <AnswerPicker answers={matches} active={activeAnswer} onActive={setActiveAnswer} onChoose={chooseAnswer} />}
             <Textarea
+              ref={box}
               value={text}
               dir="auto"
               readOnly={(busy !== null && busy !== "suggest") || voiceOn}

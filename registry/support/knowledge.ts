@@ -54,6 +54,46 @@ export function docsFromUrl(url: string, options: { id?: string; fetch?: typeof 
   };
 }
 
+/** A label in your docs' language → the same label as the customer sees it in theirs. */
+export type InterfaceLabels = Record<string, string>;
+
+/**
+ * Pairs your app's translation files into the labels a customer sees, for `interfaceLabels`:
+ * `labelsFromMessages(en, fr)` gives `{ "Get Verified": "Se faire vérifier", ... }`. Keys are
+ * matched by path. Only short labels are kept (screens, tabs, buttons, fields): sentences,
+ * placeholders like `{name}` and markup are left out, and so are strings the translation left alike.
+ */
+export function labelsFromMessages(
+  source: unknown,
+  translated: unknown,
+  options: { /** Top-level namespaces to leave out, such as the marketing site or the admin. */ exclude?: string[]; maxLength?: number } = {}
+): InterfaceLabels {
+  const maxLength = options.maxLength ?? 48;
+  const exclude = new Set(options.exclude ?? []);
+  const labels: InterfaceLabels = {};
+  const walk = (a: unknown, b: unknown, depth: number) => {
+    if (!a || !b || typeof a !== "object" || typeof b !== "object") return;
+    for (const [key, value] of Object.entries(a as Record<string, unknown>)) {
+      if (depth === 0 && exclude.has(key)) continue;
+      const other = (b as Record<string, unknown>)[key];
+      if (value && typeof value === "object") walk(value, other, depth + 1);
+      else if (typeof value === "string" && typeof other === "string" && isLabel(value, maxLength) && isLabel(other, maxLength * 2)) {
+        const from = value.trim();
+        const to = other.trim();
+        // The first translation wins: the same label names the same thing across screens.
+        if (from.toLowerCase() !== to.toLowerCase() && !(from in labels)) labels[from] = to;
+      }
+    }
+  };
+  walk(source, translated, 0);
+  return labels;
+}
+
+const isLabel = (text: string, maxLength: number) => {
+  const value = text.trim();
+  return value.length >= 2 && value.length <= maxLength && !/[{}<>\n]/.test(value) && !/[.!?:;…]$/.test(value) && /\p{L}/u.test(value);
+};
+
 /** Splits an llms-full.txt-style document on its top-level headings. */
 export function splitOnHeadings(document: string, fallbackUrl: string | null = null): KnowledgeArticle[] {
   const sections: { title: string; lines: string[] }[] = [];

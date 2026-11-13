@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { docsFromFiles, docsFromUrl } from "../registry/support/knowledge";
+import { docsFromFiles, docsFromUrl, labelsFromMessages } from "../registry/support/knowledge";
 
 describe("docsFromFiles", () => {
   it("reads titles from frontmatter and leaves imports, exports and JSX tags out", async () => {
@@ -103,5 +103,23 @@ describe("docsFromUrl", () => {
       fetch: (async () => new Response("nope", { status: 503 })) as unknown as typeof fetch,
     });
     await expect(source.load()).rejects.toThrow("503");
+  });
+});
+
+describe("labelsFromMessages", () => {
+  it("pairs short labels by key, leaving out sentences, placeholders, untranslated strings and excluded namespaces", () => {
+    const en = {
+      console: { verify: "Get Verified", title: "Verification", intro: "Fill in the form below.", hello: "Hi {name}", same: "API", nested: { payout: "Payout settings" } },
+      marketing: { cta: "Start now" },
+    };
+    const fr = {
+      console: { verify: "Se faire vérifier", title: "Vérification", intro: "Remplissez le formulaire.", hello: "Bonjour {name}", same: "API", nested: { payout: "Paramètres de versement" } },
+      marketing: { cta: "Commencer" },
+    };
+    expect(labelsFromMessages(en, fr, { exclude: ["marketing"] })).toEqual({
+      "Get Verified": "Se faire vérifier",
+      Verification: "Vérification",
+      "Payout settings": "Paramètres de versement",
+    });
   });
 });
