@@ -143,7 +143,8 @@ export type TimelineEvent = {
     | "action_run"
     | "ticket_started"
     | "autopilot_sent"
-    | "autopilot_flagged";
+    | "autopilot_flagged"
+    | "outreach_flagged";
   actorId: string | null;
   data: Record<string, unknown>;
   createdAt: DateLike;
@@ -312,6 +313,8 @@ export type Outreach = {
   ticketId: string | null;
   /** Sent with nobody reading it first. */
   auto: boolean;
+  /** An agent marked it as wrong after it went out on its own. */
+  flaggedAt?: DateLike | null;
   decidedBy: Agent | null;
   drafted: boolean;
   createdAt: DateLike;
@@ -327,6 +330,9 @@ export type OutreachKind = {
   enabledBy: Agent | null;
   enabledAt: DateLike | null;
   pausedAt: DateLike | null;
+  /** quality: its record slipped. flagged: an agent marked a message it sent as wrong. */
+  pauseReason?: "quality" | "flagged" | null;
+  /** The record meets the thresholds: a paused kind can be resumed. */
   ready: boolean;
   record: AutopilotRecord;
 };
@@ -564,6 +570,8 @@ export interface SupportAiClient {
   dismissOutreach?(input: { id: string }): Promise<unknown>;
   /** `support.ai.holdOutreach`: stops a message that was about to send on its own. */
   holdOutreach?(input: { id: string }): Promise<unknown>;
+  /** `support.ai.flagOutreach`: marks a message that went out on its own as wrong, which pauses its kind. */
+  flagOutreach?(input: { id: string; note?: string }): Promise<unknown>;
   getOutreachKinds?(): Promise<OutreachOverview>;
   /** `support.ai.setOutreachKind`: lets a kind send on its own (refused until it's ready), or takes that back. */
   setOutreachKind?(input: { kind: string; on: boolean }): Promise<unknown>;

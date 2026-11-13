@@ -888,7 +888,7 @@ export function SpikeAlerts({ tickets = true }: { tickets?: boolean }) {
                 </p>
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
               <Link href={spikeLink(inboxHref, spike)} className="text-sm font-medium underline underline-offset-2">
                 {t("insights.viewTickets")}
               </Link>

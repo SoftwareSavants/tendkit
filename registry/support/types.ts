@@ -116,7 +116,9 @@ export type TicketEventType =
   /** An agent marked a reply Autopilot sent as wrong. */
   | "autopilot_flagged"
   /** Your team wrote first: the ticket opened with a message to the customer. `actorId` is the agent, null when it was sent automatically. */
-  | "ticket_started";
+  | "ticket_started"
+  /** An agent marked an outreach message that went out on its own as wrong. */
+  | "outreach_flagged";
 
 export type TicketEvent = {
   id: string;

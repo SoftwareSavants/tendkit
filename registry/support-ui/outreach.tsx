@@ -203,7 +203,8 @@ function RecentList({ items }: { items: Outreach[] }) {
   return (
     <ul className="mt-2 divide-y overflow-hidden rounded-xl border bg-card">
       {items.map((item) => {
-        const how = item.status === "dismissed" ? t("ai.outreach.dismissed", { name: item.decidedBy?.name ?? "" }) : item.auto ? t("ai.outreach.sentAuto") : t("ai.outreach.sent", { name: item.decidedBy?.name ?? "" });
+        const sent = item.auto ? t("ai.outreach.sentAuto") : t("ai.outreach.sent", { name: item.decidedBy?.name ?? "" });
+        const how = item.status === "dismissed" ? t("ai.outreach.dismissed", { name: item.decidedBy?.name ?? "" }) : item.flaggedAt ? `${sent} · ${t("ai.autopilot.outcome.flagged")}` : sent;
         const line = (
           <>
             <span className="min-w-0 truncate">
@@ -239,11 +240,13 @@ const stageStyles: Record<OutreachKind["stage"], string> = {
   paused: "bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300",
 };
 
-const PARTS: { key: "used" | "light" | "heavy" | "discarded"; count: (r: AutopilotRecord) => number; className: string }[] = [
+const PARTS: { key: "used" | "light" | "heavy" | "discarded" | "unhappy" | "flagged"; count: (r: AutopilotRecord) => number; className: string }[] = [
   { key: "used", count: (r) => r.usedAsIs, className: "bg-emerald-600 dark:bg-emerald-500" },
   { key: "light", count: (r) => r.lightlyEdited, className: "bg-emerald-600/45 dark:bg-emerald-500/45" },
   { key: "heavy", count: (r) => r.heavilyEdited, className: "bg-amber-500" },
   { key: "discarded", count: (r) => r.discarded, className: "bg-muted-foreground/50" },
+  { key: "unhappy", count: (r) => r.cameBackUnhappy, className: "bg-red-400" },
+  { key: "flagged", count: (r) => r.flagged, className: "bg-red-600" },
 ];
 
 /** In AI settings: each kind of outreach with its track record, and the switch that lets it send on its own. */
@@ -348,7 +351,9 @@ function KindRow({ kind, overview, busy, error, onDecide }: { kind: OutreachKind
           </ul>
         )}
       </div>
-      {stage === "paused" && kind.pausedAt && <p className="text-sm text-amber-800 dark:text-amber-300">{t("ai.outreach.pausedNote", { when: formatWhen(kind.pausedAt, locale) })}</p>}
+      {stage === "paused" && kind.pausedAt && (
+        <p className="text-sm text-amber-800 dark:text-amber-300">{t(kind.pauseReason === "flagged" ? "ai.outreach.pausedFlagged" : "ai.outreach.pausedNote", { when: formatWhen(kind.pausedAt, locale) })}</p>
+      )}
       {stage === "on" && kind.enabledBy && kind.enabledAt && (
         <p className="text-xs text-muted-foreground">{t("ai.autopilot.enabledBy", { name: kind.enabledBy.name, when: formatWhen(kind.enabledAt, locale) })}</p>
       )}

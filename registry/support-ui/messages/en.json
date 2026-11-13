@@ -85,6 +85,7 @@
       "actionFailed": "{actor} ran {title}, and it didn't go through",
       "actionUnconfirmed": "{actor} ran {title}, and it didn't confirm",
       "autopilotFlagged": "{actor} flagged Autopilot's reply as wrong",
+      "outreachFlagged": "{actor} flagged this message as wrong",
       "started": "{actor} started this conversation",
       "startedAuto": "Sent automatically from a signal"
     },
@@ -407,11 +408,14 @@
       "evidence": "{good} of the last {drafts} messages sent as drafted or lightly edited ({rate}%)",
       "progress": "{drafts} of {needed} messages so far",
       "pausedNote": "Paused {when}: too few of its recent messages went out as drafted. It can resume once the record recovers.",
+      "pausedFlagged": "Paused {when}: an agent flagged a message as wrong. Read it, then resume.",
       "counts": {
         "used": "{count} as drafted",
         "light": "{count} lightly edited",
         "heavy": "{count} rewritten",
-        "discarded": "{count} dismissed"
+        "discarded": "{count} dismissed",
+        "unhappy": "{count} answered unhappy",
+        "flagged": "{count} flagged as wrong"
       },
       "sentOnItsOwn": "{count} sent on their own"
     }

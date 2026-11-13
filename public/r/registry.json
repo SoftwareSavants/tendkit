@@ -225,6 +225,11 @@
           "path": "registry/support/postgres/migrations/0007_proactive.sql",
           "type": "registry:file",
           "target": "~/lib/support/postgres/0007_proactive.sql"
+        },
+        {
+          "path": "registry/support/postgres/migrations/0008_outreach_record.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/postgres/0008_outreach_record.sql"
         }
       ]
     },
@@ -280,6 +285,11 @@
           "path": "registry/support/d1/migrations/0007_proactive.sql",
           "type": "registry:file",
           "target": "~/lib/support/d1/0007_proactive.sql"
+        },
+        {
+          "path": "registry/support/d1/migrations/0008_outreach_record.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/d1/0008_outreach_record.sql"
         }
       ]
     },

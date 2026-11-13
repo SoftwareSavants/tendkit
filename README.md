@@ -57,7 +57,7 @@ Tendkit targets Next.js (App Router), Tailwind 4, shadcn/ui, TanStack Query and 
      channels: [resendChannel({ id: "email", apiKey, webhookSecret, address: "support@acme.com", replyAddress: "support@in.acme.com" })],
      directory, // who is this email? which customer? who are the agents?
      notify, // email your team
-     acknowledgement: () => ({ text: "Thanks — we've received your message and will reply to this email." }),
+     acknowledgement: () => ({ text: "Thanks, we've received your message and will reply to this email." }),
      fromName: "Acme Support",
    });
    ```

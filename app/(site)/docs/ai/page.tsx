@@ -370,8 +370,9 @@ export default function Ai() {
           <Code title="db/schema.ts" lang="ts" code={`export * from "@/lib/support/postgres/ai-schema";`} className="mt-1" />
           <p className="mt-3 text-muted-foreground">
             Then generate and apply a migration with Drizzle as usual. <code>lib/support/postgres/0001_ai.sql</code>,{" "}
-            <code>0002_memory.sql</code>, <code>0003_actions.sql</code>, <code>0004_autopilot.sql</code> and{" "}
-            <code>0006_insights_ai.sql</code> are the reference.
+            <code>0002_memory.sql</code>, <code>0003_actions.sql</code>, <code>0004_autopilot.sql</code>,{" "}
+            <code>0006_insights_ai.sql</code>, <code>0007_proactive.sql</code> and{" "}
+            <code>0008_outreach_record.sql</code> are the reference.
           </p>
         </Step>
         <Step title="Give it a model and your docs">
@@ -428,6 +429,7 @@ export default function Ai() {
           { name: "knowledge", type: "KnowledgeSource[]", default: "[]", description: "What suggestions may answer from. See Knowledge." },
           { name: "actions", type: "SupportAction[]", default: "[]", description: "What AI may do in your product for the customer on the ticket. See Actions." },
           { name: "autopilot", type: "false | AutopilotOptions", description: "Thresholds, checks and limits for the topics your team lets answer on their own. Nothing is on until someone switches a topic on. false removes it. See Autopilot." },
+          { name: "spikes", type: "false | { minCustomers?, windowMinutes?, factor?, baselineDays? }", description: <>When a topic counts as a likely incident: by default 5 different customers within 120 minutes, at 3 times its usual volume over the last 14 days. false switches detection off. See <Link href="/docs/insights#spikes">Spikes</Link>.</> },
           { name: "proactive", type: "false | ProactiveOptions", description: <>Limits and thresholds for outreach from <code>support.signal()</code>. false switches signals off. See <Link href="/docs/proactive#signals">Proactive and self-serve</Link>.</> },
           { name: "selfServe", type: "false | { maxPerHour?, maxQuestions?, quietHours? }", description: <>Caps for the portal&apos;s Ask box (20 questions a customer an hour, 8 a conversation), which answers nothing until your team switches it on in AI settings. false removes it. See <Link href="/docs/proactive#self-serve">Self-serve</Link>.</> },
           { name: "defer", type: "(work: Promise) => void", description: "Runs the model calls after the webhook has answered. Without it they run in the next runScheduled." },
@@ -766,6 +768,11 @@ export default function Ai() {
           The draft is confident and fully sourced: the model marked every statement as backed by a source, every
           source it cited exists, and at least one of them is an article, an approved answer, an account fact or a
           lookup. Guidance alone is tone, not an answer.
+        </li>
+        <li>
+          Nothing on the ticket reads like an attempt to steer the assistant (&quot;ignore your instructions&quot;, a
+          request for another customer&apos;s data), and the reply doesn&apos;t recite your guidance. Either one
+          leaves the draft to an agent as <code>not_confident</code>. A false alarm costs one review.
         </li>
         <li>It proposes no action. Changes to an account always wait for an agent.</li>
         <li>The customer doesn&apos;t sound angry and the ticket isn&apos;t urgent (<code>blockMoods</code>, <code>blockUrgencies</code>).</li>

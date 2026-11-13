@@ -91,6 +91,8 @@ case "ai.dismissOutreach":
   return Response.json(await s.ai.dismissOutreach({ ...input, actorId: agent.id }));
 case "ai.holdOutreach":
   return Response.json(await s.ai.holdOutreach({ ...input, actorId: agent.id }));
+case "ai.flagOutreach":
+  return Response.json(await s.ai.flagOutreach({ ...input, actorId: agent.id })); // { id, note? }
 case "ai.getOutreachKinds":
   return Response.json(await s.ai.getOutreachKinds());
 case "ai.setOutreachKind":
@@ -179,6 +181,7 @@ const CLIENT = `export const supportClient: SupportClient = {
     sendOutreach: (input) => call("ai.sendOutreach", input),
     dismissOutreach: (input) => call("ai.dismissOutreach", input),
     holdOutreach: (input) => call("ai.holdOutreach", input),
+    flagOutreach: (input) => call("ai.flagOutreach", input),
     getOutreachKinds: () => call("ai.getOutreachKinds"),
     setOutreachKind: (input) => call("ai.setOutreachKind", input),
     previewBroadcast: (input) => call("ai.previewBroadcast", input),
@@ -488,7 +491,9 @@ export default function Proactive() {
       <ul>
         <li>
           <strong>The track record.</strong> For each kind, over <code>windowDays</code>: how many proposals were sent
-          as drafted, lightly edited, rewritten or dismissed, measured the same way as Autopilot&apos;s. Proposals AI
+          as drafted, lightly edited, rewritten or dismissed, measured the same way as Autopilot&apos;s. Two things
+          that happen after sending count against the kind too: the customer&apos;s first answer to the message is
+          unhappy (they sound frustrated or angry, or say it was wrong), or an agent flags the message. Proposals AI
           couldn&apos;t draft and incident messages aren&apos;t counted.
         </li>
         <li>
@@ -522,8 +527,17 @@ export default function Proactive() {
         <li>
           <strong>Automatic pause.</strong> When a kind&apos;s latest decided proposals fall under <code>minRate</code>{" "}
           (judged from 10 proposals on, or from <code>minDrafts</code> when that is lower), the kind pauses. This is
-          checked each time a message of the kind is drafted. It can be switched on again once the record has
-          recovered.
+          checked on every <code>runScheduled</code> and each time a message of the kind is drafted. It can be switched
+          on again once the record has recovered. A held message is sent only while its kind is still on: one whose
+          kind was paused or switched off in the meantime waits for an agent.
+        </li>
+        <li>
+          <strong>Flag as wrong.</strong> On its ticket, a message that went out on its own carries a one-click flag
+          for agents (<code>support.ai.flagOutreach({"{ id, actorId, note? }"})</code>, where <code>id</code> is the
+          outreach id). Any agent can raise it. The kind pauses at once, held messages of the kind return to the queue,
+          the ticket goes back to open and gets an <code>outreach_flagged</code> event. The kind stays paused until
+          someone switches it on or off again, which counts as the review of the flag. Messages an agent sent
+          can&apos;t be flagged.
         </li>
         <li>
           <strong>Switching off.</strong> <code>setOutreachKind({"{ kind, on: false, actorId }"})</code> also returns
@@ -533,8 +547,9 @@ export default function Proactive() {
       <p>
         <code>support.ai.getOutreachKinds()</code> returns the readiness view: every kind that has signalled within{" "}
         <code>windowDays</code> or was ever switched on, each with its stage (<code>collecting</code>,{" "}
-        <code>eligible</code>, <code>on</code>, <code>paused</code>), its record, the title of its latest signal and
-        who switched it on, plus the thresholds, <code>holdMinutes</code>, whether the switch exists (
+        <code>eligible</code>, <code>on</code>, <code>paused</code>), its record, the title of its latest signal,
+        who switched it on and, while paused, why (<code>pauseReason</code>: <code>quality</code> or{" "}
+        <code>flagged</code>), plus the thresholds, <code>holdMinutes</code>, whether the switch exists (
         <code>autoSend</code>) and whether the kill switch is on (<code>stopped</code>).
       </p>
       <Code title="app/api/support/route.ts" lang="ts" code={OUTREACH_API} />
@@ -673,8 +688,11 @@ export default function Proactive() {
 
       <H2 id="store">Store and migration</H2>
       <p>
-        Apply <code>0007_proactive.sql</code>, which ships with <code>support-ai-postgres</code> and{" "}
-        <code>support-ai-d1</code>, before you deploy. It adds:
+        Apply <code>0007_proactive.sql</code> and then <code>0008_outreach_record.sql</code>, which ship with{" "}
+        <code>support-ai-postgres</code> and <code>support-ai-d1</code>, before you deploy. The second adds the
+        columns behind a kind&apos;s record after sending: <code>follow_up</code> and the flag columns on{" "}
+        <code>support_outreach</code>, and <code>pause_reason</code> on <code>support_outreach_kinds</code>. The first
+        adds:
       </p>
       <Props
         rows={[
@@ -701,6 +719,7 @@ export default function Proactive() {
         rows={[
           { name: "NewTicketDialog, NewTicketButton", type: "new-ticket-dialog.tsx", description: "New ticket in the inbox and Message on a ticket's customer card. Needs client.startTicket. listChannels lets the agent choose the channel and explains the ones that can't write first, listContacts finds people, uploadForNewTicket adds attachments, and ai.draftOpening adds a draft from one line." },
           { name: "OutreachQueue", type: "outreach.tsx", description: "The inbox's Outreach tab. Needs ai.listOutreach; ai.sendOutreach, ai.dismissOutreach and ai.holdOutreach are its buttons." },
+          { name: "OutreachMark", type: "autopilot.tsx", description: "On a ticket, under a message that went out on its own: \"Sent automatically from a signal\" and the flag. The flag needs ai.flagOutreach." },
           { name: "OutreachKinds", type: "outreach.tsx", description: "Each kind's readiness and switch, inside SupportAiSettings. Needs ai.getOutreachKinds and ai.setOutreachKind." },
           { name: "BroadcastDialog", type: "outreach.tsx", description: "Opened from a spike's \"Message customers\". Needs ai.previewBroadcast and ai.sendBroadcast; ai.draftBroadcast adds the draft from one line." },
           { name: "SupportAsk", type: "support-ask.tsx", description: "The Ask box at the top of SupportRequests. Needs ask on the portal client and ask: true from list(); rateAnswer and escalate are its thumbs and its hand-off." },

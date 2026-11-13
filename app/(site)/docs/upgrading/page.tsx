@@ -52,20 +52,22 @@ export default function Upgrading() {
         statements file the outcomes you already recorded under their topics, so keep them when you write your own
         migration), <code>0005_insights.sql</code> for <a href="/docs/insights">Insights</a> (three indexes on{" "}
         <code>support_tickets</code> and <code>support_events</code>; it ships with the store, so apply it with or
-        without AI) and <code>0006_insights_ai.sql</code> for Insights with AI (the <code>support_spikes</code> table
-        and an index on <code>support_suggestions</code>) and <code>0007_proactive.sql</code> for{" "}
+        without AI), <code>0006_insights_ai.sql</code> for Insights with AI (the <code>support_spikes</code> table
+        and an index on <code>support_suggestions</code>), and <code>0007_proactive.sql</code> with{" "}
+        <code>0008_outreach_record.sql</code> for{" "}
         <Link href="/docs/proactive">Proactive and self-serve</Link> (the <code>support_signals</code>,{" "}
         <code>support_outreach</code>, <code>support_outreach_kinds</code> and <code>support_ask_sessions</code> tables,
-        and a <code>self_serve</code> column on <code>support_ai_settings</code>). Apply the migration before you deploy
-        the updated code.
+        and a <code>self_serve</code> column on <code>support_ai_settings</code>; 0008 adds <code>follow_up</code> and
+        the flag columns to <code>support_outreach</code> and <code>pause_reason</code> to{" "}
+        <code>support_outreach_kinds</code>). Apply the migration before you deploy the updated code.
       </p>
 
       <H2 id="proactive">Taking Proactive and self-serve</H2>
       <p>
         This update adds <code>startTicket</code>, signals and outreach, incident broadcast and the portal&apos;s Ask
         box. If you use the shipped stores and adapters as they are, take the files and apply{" "}
-        <code>0007_proactive.sql</code> (with AI only; starting a conversation needs no migration). If you changed or
-        replaced any of these, check them:
+        <code>0007_proactive.sql</code> and <code>0008_outreach_record.sql</code> (with AI only; starting a
+        conversation needs no migration). If you changed or replaced any of these, check them:
       </p>
       <ul>
         <li>
@@ -82,7 +84,10 @@ export default function Upgrading() {
         <li>
           <strong>Your own <code>AiStore</code>.</strong> Add the methods under &quot;Proactive and self-serve&quot; in{" "}
           <code>ai-store.ts</code>: signals, outreach, outreach kinds, Ask sessions and <code>selfServeStats</code>.
-          Settings gain <code>selfServe</code>, false by default.
+          Settings gain <code>selfServe</code>, false by default. Since <code>0008_outreach_record.sql</code>, that
+          list includes <code>flagOutreach</code> and <code>reviewOutreachFlags</code>,{" "}
+          <code>pauseOutreachKind</code> takes an optional reason, an outreach row carries <code>followUp</code> and
+          its flag fields, and a kind carries <code>pauseReason</code>.
         </li>
         <li>
           <strong>Actions.</strong> <code>SupportAction.run</code> and <code>available</code> now receive{" "}

@@ -221,8 +221,12 @@ export interface AiStore {
   /** Every kind someone switched on at some point, whatever its status now. */
   listOutreachKinds(): Promise<OutreachKind[]>;
   saveOutreachKind(kind: OutreachKind): Promise<void>;
-  /** Pauses a kind that is on. Returns false when it wasn't on. */
-  pauseOutreachKind(kind: string, at: Date): Promise<boolean>;
+  /** Pauses a kind that is on. Returns false when it wasn't on. `reason` defaults to "quality". */
+  pauseOutreachKind(kind: string, at: Date, reason?: NonNullable<OutreachKind["pauseReason"]>): Promise<boolean>;
+  /** Marks a message that went out on its own as wrong. Returns false when it already was, or an agent sent it. The column is in `0008_outreach_record.sql`. */
+  flagOutreach(id: string, input: { by: string; note: string | null }, at: Date): Promise<boolean>;
+  /** A person looked at a kind's flagged messages: they no longer hold the kind back. */
+  reviewOutreachFlags(kind: string, at: Date): Promise<void>;
   /** The kinds signals have arrived with, most recent first. */
   listSignalKinds(since: Date): Promise<{ kind: string; title: string; lastAt: Date }[]>;
 
@@ -267,6 +271,7 @@ export type OutreachPatch = Partial<
     | "auto"
     | "change"
     | "decidedAt"
+    | "followUp"
   >
 >;
 
@@ -277,6 +282,8 @@ export type OutreachKind = {
   enabledBy: string | null;
   enabledAt: Date | null;
   pausedAt: Date | null;
+  /** "quality": its track record fell under the threshold. "flagged": an agent marked a sent message as wrong. */
+  pauseReason: "quality" | "flagged" | null;
 };
 
 /** A topic's Autopilot switch, and who set it. */

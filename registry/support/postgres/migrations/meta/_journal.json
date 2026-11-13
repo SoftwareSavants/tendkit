@@ -57,6 +57,13 @@
       "when": 1794535575187,
       "tag": "0007_proactive",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1794537355454,
+      "tag": "0008_outreach_record",
+      "breakpoints": true
     }
   ]
 }

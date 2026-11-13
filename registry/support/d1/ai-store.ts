@@ -844,6 +844,7 @@ export function createD1AiStore(db: Db): AiStore {
         enabledBy: row.enabledBy,
         enabledAt: row.enabledAt,
         pausedAt: row.pausedAt,
+        pauseReason: row.pauseReason as OutreachKind["pauseReason"],
       }));
     },
 
@@ -852,13 +853,29 @@ export function createD1AiStore(db: Db): AiStore {
       await db.insert(supportOutreachKinds).values(row).onConflictDoUpdate({ target: supportOutreachKinds.kind, set: row });
     },
 
-    async pauseOutreachKind(kind, at) {
+    async pauseOutreachKind(kind, at, reason = "quality") {
       const rows = await db
         .update(supportOutreachKinds)
-        .set({ status: "paused", pausedAt: at, updatedAt: at })
+        .set({ status: "paused", pausedAt: at, pauseReason: reason, updatedAt: at })
         .where(and(eq(supportOutreachKinds.kind, kind), eq(supportOutreachKinds.status, "on")))
         .returning({ kind: supportOutreachKinds.kind });
       return rows.length > 0;
+    },
+
+    async flagOutreach(id, input, at) {
+      const rows = await db
+        .update(supportOutreach)
+        .set({ flaggedAt: at, flaggedBy: input.by, flagNote: input.note, flagReviewedAt: null })
+        .where(and(eq(supportOutreach.id, id), eq(supportOutreach.status, "sent"), eq(supportOutreach.auto, true), isNull(supportOutreach.flaggedAt)))
+        .returning({ id: supportOutreach.id });
+      return rows.length > 0;
+    },
+
+    async reviewOutreachFlags(kind, at) {
+      await db
+        .update(supportOutreach)
+        .set({ flagReviewedAt: at })
+        .where(and(eq(supportOutreach.kind, kind), isNotNull(supportOutreach.flaggedAt), isNull(supportOutreach.flagReviewedAt)));
     },
 
     async listSignalKinds(since) {
@@ -944,7 +961,7 @@ export function createD1AiStore(db: Db): AiStore {
 }
 
 function toOutreach(row: typeof supportOutreach.$inferSelect): Outreach {
-  return { ...row, status: row.status as Outreach["status"], autoBlock: row.autoBlock as Outreach["autoBlock"] };
+  return { ...row, status: row.status as Outreach["status"], autoBlock: row.autoBlock as Outreach["autoBlock"], followUp: row.followUp as Outreach["followUp"] };
 }
 
 function toAskSession(row: typeof supportAskSessions.$inferSelect): AskSession {

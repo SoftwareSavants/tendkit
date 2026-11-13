@@ -28,7 +28,7 @@ import { ChangeContactDialog } from "./change-contact-dialog";
 import { TicketInsightBar, foreignLanguage, languageName, useMessageTranslation } from "./ai";
 import { ApprovedAnswerDialog, ArticleDialog } from "./memory";
 import { RunActionDialog } from "./actions";
-import { AutopilotMark, autopilotMark } from "./autopilot";
+import { AutopilotMark, OutreachMark, autopilotMark, outreachMark } from "./autopilot";
 
 /** One ticket: the conversation, the reply box, and the customer next to it. */
 export function SupportTicket({ ticketId }: { ticketId: string }) {
@@ -235,7 +235,7 @@ function TicketControls({ detail, agents }: { detail: TicketDetail; agents: Agen
 }
 
 function Timeline({ detail, agents }: { detail: TicketDetail; agents: Agent[] }) {
-  const { t, locale, viewerId } = useSupport();
+  const { client, t, locale, viewerId } = useSupport();
   const agentName = (id: string | null) =>
     !id ? null : id === viewerId ? t("inbox.you") : agents.find((a) => a.id === id)?.name ?? t("ticket.formerAgent");
 
@@ -256,8 +256,10 @@ function Timeline({ detail, agents }: { detail: TicketDetail; agents: Agent[] })
 
   // Autopilot's send is marked on the reply itself. A flag raised by a client that no longer shows there still gets its line.
   const onItsMessage = (event: TimelineEvent) =>
-    (event.type === "autopilot_sent" || event.type === "autopilot_flagged") &&
-    detail.timeline.some((e) => e.type === "message" && e.message.id === event.data.messageId);
+    ((event.type === "autopilot_sent" || event.type === "autopilot_flagged" || event.type === "outreach_flagged") &&
+      detail.timeline.some((e) => e.type === "message" && e.message.id === event.data.messageId)) ||
+    // A message outreach sent on its own says so itself.
+    (event.type === "ticket_started" && Boolean(client.ai) && detail.timeline.some((e) => e.type === "message" && outreachMark(detail, e.message)?.sent.id === event.id));
 
   return (
     <ol className="space-y-3">
@@ -314,6 +316,8 @@ function describeEvent(event: TimelineEvent, t: ReturnType<typeof useSupport>["t
       return t("ai.autopilot.sentBy", { topic: String(event.data.topic ?? "") });
     case "autopilot_flagged":
       return t("ticket.events.autopilotFlagged", { actor });
+    case "outreach_flagged":
+      return t("ticket.events.outreachFlagged", { actor });
     case "forwarded": {
       const from = event.data.from as { address: string; name?: string | null } | undefined;
       return t("ticket.events.forwarded", { actor: agentName(event.actorId) ?? from?.name ?? from?.address ?? actor });
@@ -346,12 +350,15 @@ function MessageCard({
 
   // A reply nobody read first says so, to agents only: the customer sees a reply from the team.
   const autopilot = client.ai ? autopilotMark(detail, message) : null;
+  const outreach = client.ai && !autopilot ? outreachMark(detail, message) : null;
   const author =
     message.kind === "inbound"
       ? message.from?.name || message.from?.address || contactLabel(detail.contact)
       : autopilot
         ? t("ai.autopilot.name")
-        : agentName(message.authorId) ?? message.from?.name ?? t("ticket.formerAgent");
+        : outreach
+          ? message.from?.name || t("ticket.events.system")
+          : agentName(message.authorId) ?? message.from?.name ?? t("ticket.formerAgent");
   // Initials come from the real name even when the label says "You".
   const avatarName =
     message.kind === "inbound" ? author : agents.find((a) => a.id === message.authorId)?.name ?? author;
@@ -403,9 +410,10 @@ function MessageCard({
         </div>
       )}
 
-      {(hasMore || failed || foreign || reusable || autopilot) && (
+      {(hasMore || failed || foreign || reusable || autopilot || outreach) && (
         <footer className="mt-3 flex flex-wrap items-center gap-3 text-xs">
           {autopilot && <AutopilotMark detail={detail} sent={autopilot.sent} flagged={autopilot.flagged} agentName={agentName} />}
+          {outreach && <OutreachMark detail={detail} sent={outreach.sent} flagged={outreach.flagged} agentName={agentName} />}
           {reusable && (
             <>
               <button type="button" className="text-muted-foreground underline underline-offset-2 hover:text-foreground" onClick={() => setSaving(true)}>

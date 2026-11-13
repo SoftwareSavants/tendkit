@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
@@ -102,6 +102,15 @@ export function SupportInbox() {
     ...(counts.data?.spam || status === "spam" ? ["spam" as const] : []),
   ];
   const current = outreach ? "outreach" : status;
+  // Scrolls the tab strip, and nothing else, until the current tab shows. Counts arriving change its width.
+  const strip = useRef<HTMLDivElement>(null);
+  const tabCounts = `${counts.data?.open}/${counts.data?.waiting}/${counts.data?.spam}/${proposals.data?.length}`;
+  useEffect(() => {
+    const tab = strip.current?.querySelector<HTMLElement>('[aria-pressed="true"]');
+    if (!tab || !strip.current) return;
+    const [button, box] = [tab.getBoundingClientRect(), strip.current.getBoundingClientRect()];
+    if (button.left < box.left || button.right > box.right) strip.current.scrollLeft += button.left - box.left - 12;
+  }, [current, tabCounts]);
   const day = (value: Date) => value.toLocaleDateString(locale, { day: "numeric", month: "short" });
   const chips = [
     filters.topic && t("inbox.filters.topic", { value: filters.topic }),
@@ -134,7 +143,8 @@ export function SupportInbox() {
         </div>
       )}
       <div className="flex flex-wrap items-end justify-between gap-3 border-b">
-        <div className="-mb-px flex gap-1 overflow-x-auto">
+        {/* On a phone the tabs scroll sideways, and the one you're on is brought into view. */}
+        <div ref={strip} className="-mb-px flex min-w-0 max-w-full gap-1 overflow-x-auto">
           {tabs.map((tab) => (
             <button
               key={tab}

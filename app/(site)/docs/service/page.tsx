@@ -138,7 +138,7 @@ export default function Service() {
       <Props
         rows={[
           { name: "handleWebhook", type: "(channelId, request) => Response", description: <>For your webhook route. See <Link href="/docs/webhooks">Webhooks</Link>.</> },
-          { name: "runScheduled", type: "() => Promise<summary>", description: "Polls channels, renews subscriptions, fails sends that never finished. With AI, also handles queued messages, the daily knowledge sync, and outreach that is waiting to be drafted or due to send." },
+          { name: "runScheduled", type: "() => Promise<summary>", description: "Polls channels, renews subscriptions, fails sends that never finished. With AI, also handles queued messages, the daily knowledge sync and memory review, held Autopilot replies, the spike check, and outreach that is waiting to be drafted or due to send." },
           { name: "ingest", type: "(channelId, event)", description: "Feed an event directly, for tests or custom transports." },
           { name: "listTickets / getTicket / counts", type: "", description: "What the inbox and ticket screens read. getTicket includes accountFacts from your directory's describeCustomer." },
           { name: "reply / retry / addNote", type: "", description: "Send a reply (status and attachments included), retry a failed one, or add an internal note." },

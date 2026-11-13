@@ -129,6 +129,14 @@ export type Outreach = {
   auto: boolean;
   /** `editWeight` between the draft and what was sent. */
   change: number | null;
+  /** After it was sent: the customer's answer was unhappy, or reopened a solved ticket. */
+  followUp: "unhappy" | "reopened" | null;
+  /** An agent marked it as wrong. Only a message that went out on its own can be. */
+  flaggedAt: Date | null;
+  flaggedBy: string | null;
+  flagNote: string | null;
+  /** Someone decided on the paused kind since: the flag no longer holds it back. */
+  flagReviewedAt: Date | null;
   createdAt: Date;
   decidedAt: Date | null;
 };

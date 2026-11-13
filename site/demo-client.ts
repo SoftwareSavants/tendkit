@@ -1226,7 +1226,7 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
   const sendDueOutreach = () => {
     for (const o of s.outreach) {
       if (o.status !== "held" || !o.sendAt || +new Date(o.sendAt) > Date.now()) continue;
-      if (pilot.stopped || kindOf(o.kind)?.stage !== "on") Object.assign(o, { status: "pending", sendAt: null, autoBlock: pilot.stopped ? "stopped" : "held_back" });
+      if (pilot.stopped || kindOf(o.kind)?.stage !== "on") Object.assign(o, { status: "pending", sendAt: null, autoBlock: pilot.stopped ? "stopped" : null });
       else deliverOutreach(o, null, o.subject ?? o.title, o.text ?? "");
       onChange();
     }
@@ -1293,6 +1293,12 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
   const spikeOf = (id: string) => {
     const spike = s.spikes.find((x) => x.id === id);
     if (!spike) throw new Error("That spike doesn't exist.");
+    return spike;
+  };
+  /** As in the engine: nobody is written to about an incident until someone on the team has acknowledged it. */
+  const acknowledgedSpike = (id: string) => {
+    const spike = spikeOf(id);
+    if (!spike.acknowledgedAt) throw new Error("Acknowledge the spike before writing to the customers it affects.");
     return spike;
   };
   const affected = (spike: Spike): Pick<BroadcastPreview, "recipients" | "skipped"> => {
@@ -1708,6 +1714,35 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
         return delay({ ok: true });
       },
 
+      async flagOutreach({ id, note }) {
+        const o = s.outreach.find((x) => x.id === id);
+        if (!o || o.status !== "sent" || !o.auto) throw new Error("Only messages that went out on their own can be flagged.");
+        if (o.flaggedAt) return delay({ ok: true });
+        o.flaggedAt = new Date();
+        const k = kindOf(o.kind);
+        if (k) {
+          const { record } = k;
+          const good = Math.max(0, record.recent.good - 1);
+          k.record = { ...record, usedAsIs: Math.max(0, record.usedAsIs - 1), flagged: record.flagged + 1, recent: { ...record.recent, good, rate: record.recent.drafts ? good / record.recent.drafts : 0 } };
+          if (k.stage === "on") Object.assign(k, { stage: "paused", pausedAt: new Date(), pauseReason: "flagged" });
+          k.ready = kindMeets(k);
+          // What was about to go out waits for an agent instead.
+          for (const held of s.outreach) if (held.kind === o.kind && held.status === "held") Object.assign(held, { status: "pending", sendAt: null, autoBlock: null });
+        }
+        const t = s.tickets.find((x) => x.id === o.ticketId);
+        if (t) {
+          const first = s.messages.get(t.id)?.find((m) => m.kind === "outbound");
+          event(t.id, "outreach_flagged", { messageId: first?.id ?? null, outreachId: o.id, kind: o.kind, note: note ?? null });
+          if (t.status !== "open") {
+            event(t.id, "status_changed", { from: t.status, to: "open" });
+            t.status = "open";
+            t.waitingSince = new Date();
+          }
+        }
+        onChange();
+        return delay({ ok: true });
+      },
+
       async getOutreachKinds() {
         sendDueOutreach();
         return delay({ autoSend: true, stopped: pilot.stopped, ...OUTREACH, kinds: s.outreachKinds.map((k) => ({ ...k, record: { ...k.record } })) });
@@ -1721,23 +1756,22 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
           if (!kindMeets(k)) {
             throw new Error(`"${kind}" isn't ready yet: ${good} of its last ${drafts} messages went out as drafted or lightly edited. It needs ${Math.round(OUTREACH.minRate * 100)}% of at least ${OUTREACH.minDrafts}.`);
           }
-          Object.assign(k, { stage: "on", enabledBy: VIEWER, enabledAt: new Date(), pausedAt: null });
+          Object.assign(k, { stage: "on", enabledBy: VIEWER, enabledAt: new Date(), pausedAt: null, pauseReason: null });
         } else if (!on) {
-          Object.assign(k, { stage: kindMeets(k) ? "eligible" : "collecting", pausedAt: null });
+          Object.assign(k, { stage: kindMeets(k) ? "eligible" : "collecting", pausedAt: null, pauseReason: null });
           // What was about to go out waits for an agent instead.
           for (const o of s.outreach) if (o.kind === kind && o.status === "held") Object.assign(o, { status: "pending", sendAt: null, autoBlock: "held_back" });
         }
         return delay({ ok: true });
       },
 
-      // The service asks for the spike to be acknowledged first; the demo lets you try it either way.
       async previewBroadcast({ spikeId }) {
-        const spike = spikeOf(spikeId);
+        const spike = acknowledgedSpike(spikeId);
         return delay({ spikeId, topic: spike.topic, channel: { id: "email", kind: CHANNELS.email.kind }, ...affected(spike) });
       },
 
       async draftBroadcast({ spikeId, intent }) {
-        const spike = spikeOf(spikeId);
+        const spike = acknowledgedSpike(spikeId);
         const said = toCustomer(intent);
         if (!said) throw new Error("Say what the message should tell them.");
         const topic = spike.topic.toLowerCase();
@@ -1748,7 +1782,7 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
       },
 
       async sendBroadcast({ spikeId, subject, text }) {
-        const spike = spikeOf(spikeId);
+        const spike = acknowledgedSpike(spikeId);
         if (!text.trim()) throw new Error("Write a message first.");
         if (!subject.trim()) throw new Error("Add a subject.");
         const { recipients } = affected(spike);

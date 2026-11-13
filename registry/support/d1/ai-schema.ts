@@ -369,6 +369,13 @@ export const supportOutreach = sqliteTable(
     /** Sent with nobody reading it first. */
     auto: integer("auto", { mode: "boolean" }).notNull().default(false),
     change: real("change"),
+    /** After it was sent: the customer's answer was unhappy, or reopened a solved ticket. */
+    followUp: text("follow_up"),
+    /** An agent marked a message that went out on its own as wrong. */
+    flaggedAt: ms("flagged_at"),
+    flaggedBy: text("flagged_by"),
+    flagNote: text("flag_note"),
+    flagReviewedAt: ms("flag_reviewed_at"),
     createdAt: ms("created_at").notNull().default(now),
     decidedAt: ms("decided_at"),
   },
@@ -389,6 +396,8 @@ export const supportOutreachKinds = sqliteTable("support_outreach_kinds", {
   enabledBy: text("enabled_by"),
   enabledAt: ms("enabled_at"),
   pausedAt: ms("paused_at"),
+  /** quality: its record slipped. flagged: an agent marked a sent message as wrong. */
+  pauseReason: text("pause_reason"),
   updatedAt: ms("updated_at").notNull().default(now),
 });
 

@@ -249,10 +249,14 @@ export function topicStage(setting: { status: "on" | "paused" | "off" } | null |
 
 /**
  * One decided proposal as Autopilot's track record reads it, so a kind earns sending on its own
- * the way a topic does: sent as drafted or lightly edited counts for it, rewritten or dismissed
- * against it. Null for proposals nobody decided on, and for an incident's messages.
+ * the way a topic does: sent as drafted or lightly edited counts for it; rewritten, dismissed,
+ * flagged as wrong, or answered by an unhappy customer counts against it. Null for proposals
+ * nobody decided on, and for an incident's messages.
  */
-export function outreachOutcome(row: Pick<Outreach, "id" | "kind" | "language" | "status" | "change" | "auto" | "ticketId" | "createdAt" | "decidedAt" | "draft" | "spikeId">): OutcomeRow | null {
+export function outreachOutcome(
+  row: Pick<Outreach, "id" | "kind" | "language" | "status" | "change" | "auto" | "ticketId" | "createdAt" | "decidedAt" | "draft" | "spikeId"> &
+    Partial<Pick<Outreach, "followUp" | "flaggedAt" | "flagReviewedAt">>
+): OutcomeRow | null {
   if (row.spikeId || !row.draft || (row.status !== "sent" && row.status !== "dismissed")) return null;
   const edited = row.status === "sent" && (row.change ?? 0) > 0;
   return {
@@ -264,9 +268,9 @@ export function outreachOutcome(row: Pick<Outreach, "id" | "kind" | "language" |
     status: row.status === "dismissed" ? "discarded" : edited ? "edited" : "used",
     change: row.change,
     autopilot: row.auto ? "sent" : null,
-    followUp: null,
-    flaggedAt: null,
-    flagReviewedAt: null,
+    followUp: row.followUp ?? null,
+    flaggedAt: row.flaggedAt ?? null,
+    flagReviewedAt: row.flagReviewedAt ?? null,
     createdAt: row.createdAt,
     decidedAt: row.decidedAt,
   };

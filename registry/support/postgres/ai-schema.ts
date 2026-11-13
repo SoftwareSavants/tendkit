@@ -359,6 +359,13 @@ export const supportOutreach = pgTable(
     /** Sent with nobody reading it first. */
     auto: boolean("auto").notNull().default(false),
     change: real("change"),
+    /** After it was sent: the customer's answer was unhappy, or reopened a solved ticket. */
+    followUp: text("follow_up"),
+    /** An agent marked a message that went out on its own as wrong. */
+    flaggedAt: at("flagged_at"),
+    flaggedBy: text("flagged_by"),
+    flagNote: text("flag_note"),
+    flagReviewedAt: at("flag_reviewed_at"),
     createdAt: at("created_at").notNull().defaultNow(),
     decidedAt: at("decided_at"),
   },
@@ -379,6 +386,8 @@ export const supportOutreachKinds = pgTable("support_outreach_kinds", {
   enabledBy: text("enabled_by"),
   enabledAt: at("enabled_at"),
   pausedAt: at("paused_at"),
+  /** quality: its record slipped. flagged: an agent marked a sent message as wrong. */
+  pauseReason: text("pause_reason"),
   updatedAt: at("updated_at").notNull().defaultNow(),
 });
 

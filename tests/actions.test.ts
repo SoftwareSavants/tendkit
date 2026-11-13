@@ -211,8 +211,10 @@ describe("proposed actions", () => {
     expect(run).toMatchObject({ status: "succeeded", input: { days: 7 } });
     expect(text).toBe("Hi Emma,\n\nI've extended your trial by 7 days.");
     const rewrite = t.fast.calls.at(-1)!;
-    expect(rewrite.prompt).toContain('{"days":14}');
-    expect(rewrite.prompt).toContain('{"days":7}');
+    // What the model proposed and what ran are quoted as data, not written into the instruction.
+    expect(rewrite.prompt).toContain('<assumed>{"days":14}</assumed>');
+    expect(rewrite.prompt).toContain('<done>{"days":7}</done>');
+    expect(rewrite.prompt).toContain("<result>Trial extended");
     expect(rewrite.prompt).toContain("I've extended your trial by 14 days");
     // The card now shows what ran.
     expect((await t.support.getTicket(t.ticketId, "agent_a")).suggestion!.actions[0]).toMatchObject({ state: "done", input: { days: 7 } });

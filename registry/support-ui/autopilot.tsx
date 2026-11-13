@@ -18,8 +18,8 @@ import { MessageText } from "./parts";
 /*
  * Autopilot: the readiness view in AI settings, where a team sees each topic's track record and
  * decides whether it answers on its own, and the two marks it leaves on a ticket: a held reply
- * an agent can stop, and a sent one an agent can flag. Each part appears only when the client
- * has the method behind it.
+ * an agent can stop, and a sent one an agent can flag. A message outreach sent on its own carries
+ * the same flag. Each part appears only when the client has the method behind it.
  */
 
 const message = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback);
@@ -434,25 +434,82 @@ export function autopilotMark(detail: TicketDetail, message: TimelineMessage) {
 /** Under a reply Autopilot sent, for agents only: that it did, for which topic, and one click to say it was wrong. */
 export function AutopilotMark({ detail, sent, flagged, agentName }: { detail: TicketDetail; sent: TimelineEvent; flagged: TimelineEvent | null; agentName: (id: string | null) => string | null }) {
   const { client, t } = useSupport();
+  const flag = client.ai?.flagAutopilotReply;
+  const topic = typeof sent.data.topic === "string" ? sent.data.topic : "";
+  return (
+    <SentMark
+      ticketId={detail.ticket.id}
+      label={t("ai.autopilot.sentBy", { topic })}
+      flagged={flagged}
+      agentName={agentName}
+      settings="autopilot"
+      onFlag={flag ? (note) => flag({ suggestionId: String(sent.data.suggestionId), ...(note ? { note } : {}) }) : null}
+    />
+  );
+}
+
+/** The event that says a message went out on its own from a signal, when it did, and the flag raised on it since. */
+export function outreachMark(detail: TicketDetail, message: TimelineMessage) {
+  if (message.kind !== "outbound" || message.authorId) return null;
+  const events = detail.timeline.flatMap((entry) => (entry.type === "event" ? [entry.event] : []));
+  const sent = events.find((event) => event.type === "ticket_started" && !event.actorId && event.data.auto === true && typeof event.data.outreachId === "string");
+  // It is the message the ticket opened with.
+  const first = detail.timeline.find((entry) => entry.type === "message" && entry.message.kind === "outbound");
+  if (!sent || first?.type !== "message" || first.message.id !== message.id) return null;
+  return { sent, flagged: events.find((event) => event.type === "outreach_flagged" && event.data.outreachId === sent.data.outreachId) ?? null };
+}
+
+/** Under a message outreach sent on its own, for agents only: that it did, and one click to say it was wrong. */
+export function OutreachMark({ detail, sent, flagged, agentName }: { detail: TicketDetail; sent: TimelineEvent; flagged: TimelineEvent | null; agentName: (id: string | null) => string | null }) {
+  const { client, t } = useSupport();
+  const flag = client.ai?.flagOutreach;
+  return (
+    <SentMark
+      ticketId={detail.ticket.id}
+      label={t("ticket.events.startedAuto")}
+      flagged={flagged}
+      agentName={agentName}
+      settings="outreach"
+      onFlag={flag ? (note) => flag({ id: String(sent.data.outreachId), ...(note ? { note } : {}) }) : null}
+    />
+  );
+}
+
+/** What both marks share: who sent it, and the flag. `settings` names the readiness view a flag changes. */
+function SentMark({
+  ticketId,
+  label,
+  flagged,
+  agentName,
+  settings,
+  onFlag,
+}: {
+  ticketId: string;
+  label: string;
+  flagged: TimelineEvent | null;
+  agentName: (id: string | null) => string | null;
+  settings: "autopilot" | "outreach";
+  onFlag: ((note: string) => Promise<unknown>) | null;
+}) {
+  const { t } = useSupport();
   const queryClient = useQueryClient();
   // One click flags. The note is for those who want to say what was wrong, and stays out of the way.
   const [noting, setNoting] = useState(false);
   const [note, setNote] = useState("");
   const flag = useMutation({
-    mutationFn: () => client.ai!.flagAutopilotReply!({ suggestionId: String(sent.data.suggestionId), ...(note.trim() ? { note: note.trim() } : {}) }),
+    mutationFn: () => onFlag!(note.trim()),
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ["support", "ticket", detail.ticket.id] });
+      queryClient.invalidateQueries({ queryKey: ["support", "ticket", ticketId] });
       queryClient.invalidateQueries({ queryKey: ["support", "tickets"] });
       queryClient.invalidateQueries({ queryKey: ["support", "counts"] });
-      queryClient.invalidateQueries({ queryKey: ["support", "ai", "autopilot"] });
+      queryClient.invalidateQueries({ queryKey: ["support", "ai", settings] });
     },
   });
-  const topic = typeof sent.data.topic === "string" ? sent.data.topic : "";
   return (
     <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1">
       <span className="inline-flex items-center gap-1.5 text-muted-foreground">
         <Send className="size-3.5" />
-        <bdi>{t("ai.autopilot.sentBy", { topic })}</bdi>
+        <bdi>{label}</bdi>
       </span>
       {flagged ? (
         <span className="inline-flex items-center gap-1.5 text-destructive">
@@ -461,7 +518,7 @@ export function AutopilotMark({ detail, sent, flagged, agentName }: { detail: Ti
           {typeof flagged.data.note === "string" && flagged.data.note && <bdi className="text-muted-foreground">{flagged.data.note}</bdi>}
         </span>
       ) : (
-        client.ai?.flagAutopilotReply && (
+        onFlag && (
           <>
             <button
               type="button"
