@@ -48,8 +48,10 @@ export default function Upgrading() {
         Autopilot (the <code>support_autopilot_topics</code> table and columns on <code>support_suggestions</code>,{" "}
         <code>support_ticket_insights</code> and <code>support_ai_settings</code>; its two closing <code>UPDATE</code>{" "}
         statements file the outcomes you already recorded under their topics, so keep them when you write your own
-        migration). Apply
-        the migration before you deploy the updated code.
+        migration), <code>0005_insights.sql</code> for <a href="/docs/insights">Insights</a> (three indexes on{" "}
+        <code>support_tickets</code> and <code>support_events</code>; it ships with the store, so apply it with or
+        without AI) and <code>0006_insights_ai.sql</code> for Insights with AI (the <code>support_spikes</code> table
+        and an index on <code>support_suggestions</code>). Apply the migration before you deploy the updated code.
       </p>
     </DocsShell>
   );

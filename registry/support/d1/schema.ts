@@ -83,6 +83,9 @@ export const supportTickets = sqliteTable(
     index("support_tickets_customer_idx").on(t.customerId, t.lastMessageAt),
     index("support_tickets_contact_idx").on(t.contactId, t.channelId),
     index("support_tickets_thread_idx").on(t.channelId, t.providerThreadId),
+    /* Insights (0005_insights.sql): a period's tickets are found by when they were opened and solved. */
+    index("support_tickets_created_idx").on(t.createdAt),
+    index("support_tickets_solved_idx").on(t.solvedAt),
   ]
 );
 
@@ -150,7 +153,11 @@ export const supportEvents = sqliteTable(
     data: text("data", { mode: "json" }).$type<Record<string, unknown>>().notNull().default(sql`'{}'`),
     createdAt: createdAt(),
   },
-  (t) => [index("support_events_ticket_idx").on(t.ticketId, t.createdAt)]
+  (t) => [
+    index("support_events_ticket_idx").on(t.ticketId, t.createdAt),
+    /* Insights (0005_insights.sql): reopened tickets in a period. */
+    index("support_events_type_idx").on(t.type, t.createdAt),
+  ]
 );
 
 export const supportReads = sqliteTable(

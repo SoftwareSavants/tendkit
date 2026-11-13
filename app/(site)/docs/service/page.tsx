@@ -114,7 +114,7 @@ export default function Service() {
 
       <H2 id="notifications">Notifications</H2>
       <p>
-        <code>notify</code> receives one of four events. Send them however your team works: email, Slack, push.
+        <code>notify</code> receives one of these events. Send them however your team works: email, Slack, push.
       </p>
       <Props
         rows={[
@@ -122,6 +122,7 @@ export default function Service() {
           { name: "ticket.customer_replied", type: "{ ticket, message, contact }", description: "The customer wrote again. Usually goes to the assignee, or everyone when unassigned." },
           { name: "ticket.assigned", type: "{ ticket, assigneeId, actorId }", description: "Someone assigned the ticket." },
           { name: "message.failed", type: "{ ticket, message }", description: "A reply bounced or couldn't be delivered; message.deliveryError says why." },
+          { name: "insights.spike", type: "{ spike }", description: "With AI: many different customers raised one topic in a short window. Sent once per spike. See Insights." },
         ]}
       />
 

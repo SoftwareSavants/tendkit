@@ -38,6 +38,11 @@
           "path": "registry/support/service.ts",
           "type": "registry:file",
           "target": "~/lib/support/service.ts"
+        },
+        {
+          "path": "registry/support/insights.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/insights.ts"
         }
       ]
     },
@@ -67,6 +72,16 @@
           "path": "registry/support/postgres/migrations/0000_init.sql",
           "type": "registry:file",
           "target": "~/lib/support/postgres/0000_init.sql"
+        },
+        {
+          "path": "registry/support/postgres/stats.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/postgres/stats.ts"
+        },
+        {
+          "path": "registry/support/postgres/migrations/0005_insights.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/postgres/0005_insights.sql"
         }
       ]
     },
@@ -96,6 +111,16 @@
           "path": "registry/support/d1/migrations/0000_init.sql",
           "type": "registry:file",
           "target": "~/lib/support/d1/0000_init.sql"
+        },
+        {
+          "path": "registry/support/d1/stats.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/d1/stats.ts"
+        },
+        {
+          "path": "registry/support/d1/migrations/0005_insights.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/d1/0005_insights.sql"
         }
       ]
     },
@@ -185,6 +210,11 @@
           "path": "registry/support/postgres/migrations/0004_autopilot.sql",
           "type": "registry:file",
           "target": "~/lib/support/postgres/0004_autopilot.sql"
+        },
+        {
+          "path": "registry/support/postgres/migrations/0006_insights_ai.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/postgres/0006_insights_ai.sql"
         }
       ]
     },
@@ -230,6 +260,11 @@
           "path": "registry/support/d1/migrations/0004_autopilot.sql",
           "type": "registry:file",
           "target": "~/lib/support/d1/0004_autopilot.sql"
+        },
+        {
+          "path": "registry/support/d1/migrations/0006_insights_ai.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/d1/0006_insights_ai.sql"
         }
       ]
     },
@@ -402,7 +437,7 @@
       "name": "support-ui",
       "type": "registry:item",
       "title": "Support screens",
-      "description": "Inbox, ticket, composer and customer portal screens built on your shadcn components, with optional AI controls.",
+      "description": "Inbox, ticket, composer, insights and customer portal screens built on your shadcn components, with optional AI controls.",
       "dependencies": [
         "@tanstack/react-query@^5",
         "dompurify@^3",
@@ -444,6 +479,11 @@
           "path": "registry/support-ui/support-inbox.tsx",
           "type": "registry:file",
           "target": "~/components/support/support-inbox.tsx"
+        },
+        {
+          "path": "registry/support-ui/support-insights.tsx",
+          "type": "registry:file",
+          "target": "~/components/support/support-insights.tsx"
         },
         {
           "path": "registry/support-ui/support-ticket.tsx",

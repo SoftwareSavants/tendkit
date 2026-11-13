@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { ChevronLeft, ChevronRight, Search, Sparkles } from "lucide-react";
+import { ChevronLeft, ChevronRight, Search, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,17 +15,25 @@ import type { TicketListItem, TicketStatus } from "./client";
 import { contactLabel, formatDuration, formatWhen, waitLevel } from "./format";
 import { AgentAvatar, UnknownSenderBadge } from "./parts";
 import { UrgencyMark } from "./ai";
+import { SpikeAlerts } from "./support-insights";
 
 const TABS: TicketStatus[] = ["open", "waiting", "solved"];
 const PAGE_SIZE = 25;
 
 /** The shared inbox: what needs an answer, longest wait first. With AI, the most urgent come before that. */
 export function SupportInbox() {
-  const { client, t, viewerId } = useSupport();
+  const { client, t, viewerId, locale } = useSupport();
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
-  const status = (["open", "waiting", "solved", "spam"].includes(params.get("status") ?? "") ? params.get("status") : "open") as TicketStatus;
+  // Links from Insights narrow the list to a topic, a channel, a customer or the days tickets were opened in.
+  const date = (key: string) => {
+    const value = params.get(key) ? new Date(params.get(key)!) : null;
+    return value && Number.isFinite(value.getTime()) ? value : null;
+  };
+  const filters = { topic: params.get("topic"), channel: params.get("channel"), customer: params.get("customer"), from: date("from"), to: date("to") };
+  const filtered = Boolean(filters.topic || filters.channel || filters.customer || filters.from || filters.to);
+  const status = (["open", "waiting", "solved", "spam", ...(filtered ? ["all"] : [])].includes(params.get("status") ?? "") ? params.get("status") : "open") as TicketStatus | "all";
   const assignee = params.get("assignee") ?? "any";
   const page = Math.max(1, Number(params.get("page")) || 1);
   const search = params.get("q") ?? "";
@@ -61,10 +69,15 @@ export function SupportInbox() {
           : (agents.data?.find((a) => a.id === assignee)?.name ?? t("inbox.anyone"));
   const sort = client.ai && status === "open" ? ("priority" as const) : undefined;
   const list = useQuery({
-    queryKey: ["support", "tickets", { status, assignee, page, search, sort }],
+    queryKey: ["support", "tickets", { status, assignee, page, search, sort, ...filters, from: filters.from?.getTime(), to: filters.to?.getTime() }],
     queryFn: () =>
       client.listTickets({
-        status,
+        ...(status === "all" ? {} : { status }),
+        ...(filters.topic ? { topic: filters.topic } : {}),
+        ...(filters.channel ? { channel: filters.channel } : {}),
+        ...(filters.customer ? { customerId: filters.customer } : {}),
+        ...(filters.from ? { createdFrom: filters.from } : {}),
+        ...(filters.to ? { createdTo: filters.to } : {}),
         assignee: assignee === "any" ? undefined : assignee === "none" ? null : assignee,
         search: search || undefined,
         ...(sort ? { sort } : {}),
@@ -75,13 +88,38 @@ export function SupportInbox() {
     refetchInterval: 20_000,
   });
 
-  const tabs = counts.data?.spam || status === "spam" ? [...TABS, "spam" as const] : TABS;
+  const tabs: (TicketStatus | "all")[] = [...(filtered ? ["all" as const] : []), ...TABS, ...(counts.data?.spam || status === "spam" ? ["spam" as const] : [])];
+  const day = (value: Date) => value.toLocaleDateString(locale, { day: "numeric", month: "short" });
+  const chips = [
+    filters.topic && t("inbox.filters.topic", { value: filters.topic }),
+    filters.channel && t("inbox.filters.channel", { value: filters.channel }),
+    filters.customer && t("inbox.filters.customer", { value: list.data?.items.find((item) => item.customer?.id === filters.customer)?.customer?.name ?? filters.customer }),
+    filters.from && (filters.to ? t("inbox.filters.opened", { from: day(filters.from), to: day(filters.to) }) : t("inbox.filters.openedSince", { from: day(filters.from) })),
+  ].filter((chip): chip is string => Boolean(chip));
   const total = list.data?.total ?? 0;
   const from = total ? (page - 1) * PAGE_SIZE + 1 : 0;
   const to = Math.min(page * PAGE_SIZE, total);
 
   return (
     <div className="space-y-4">
+      {!filtered && <SpikeAlerts tickets={false} />}
+      {filtered && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {chips.map((chip) => (
+            <span key={chip} className="rounded-full border bg-card px-2.5 py-0.5 text-xs font-medium">
+              <bdi>{chip}</bdi>
+            </span>
+          ))}
+          <button
+            type="button"
+            onClick={() => setParams({ topic: null, channel: null, customer: null, from: null, to: null, status: status === "all" ? null : status })}
+            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <X className="size-3.5" aria-hidden />
+            {t("inbox.filters.clear")}
+          </button>
+        </div>
+      )}
       <div className="flex flex-wrap items-end justify-between gap-3 border-b">
         <div className="-mb-px flex gap-1 overflow-x-auto">
           {tabs.map((tab) => (
@@ -89,13 +127,15 @@ export function SupportInbox() {
               key={tab}
               type="button"
               onClick={() => setParams({ status: tab === "open" ? null : tab })}
+              aria-pressed={tab === status}
               className={cn(
                 "shrink-0 border-b-2 px-3 pb-2.5 text-sm font-medium transition-colors",
                 tab === status ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
               )}
             >
               {t(`status.${tab}`)}
-              {tab !== "solved" && counts.data?.[tab] ? (
+              {/* The counts are the whole inbox's, so they'd mislead next to a filtered list. */}
+              {!filtered && tab !== "solved" && tab !== "all" && counts.data?.[tab] ? (
                 <span className="ms-1.5 tabular-nums text-xs text-muted-foreground">{counts.data[tab]}</span>
               ) : null}
             </button>
@@ -162,12 +202,12 @@ export function SupportInbox() {
           ) : list.data?.items.length ? (
             <ul className="divide-y">
               {list.data.items.map((ticket) => (
-                <TicketRow key={ticket.id} ticket={ticket} status={status} agents={agents.data ?? []} />
+                <TicketRow key={ticket.id} ticket={ticket} status={ticket.status} agents={agents.data ?? []} />
               ))}
             </ul>
           ) : (
             <p className="px-4 py-16 text-center text-sm text-muted-foreground">
-              {search ? t("inbox.empty.search") : t(`inbox.empty.${status}`)}
+              {search ? t("inbox.empty.search") : t(`inbox.empty.${filtered ? "all" : status}`)}
             </p>
           )}
         </div>

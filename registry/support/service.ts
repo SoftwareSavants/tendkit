@@ -19,6 +19,7 @@ import {
   withoutSignature,
 } from "./text";
 import type { SupportStore, TicketQuery } from "./store";
+import { DAY_MS, dayCount, daySeries, previousPeriod, type Spike, type SupportStats } from "./insights";
 import type {
   AccountFact,
   Address,
@@ -91,6 +92,8 @@ export type SupportAiContext = {
    * and the message, marked failed, when the channel didn't take it. Never throws.
    */
   sendUnattended(input: { ticketId: string; text: string; signature: string | null }): Promise<Message | null>;
+  /** Your `notify`, for what Copilot finds on its own (a spike). Never throws. */
+  notify(notification: SupportNotification): Promise<void>;
   now: () => Date;
   log: NonNullable<SupportOptions["log"]>;
 };
@@ -117,7 +120,9 @@ export type SupportNotification =
   | { type: "ticket.created"; ticket: Ticket; message: Message; contact: Contact }
   | { type: "ticket.customer_replied"; ticket: Ticket; message: Message; contact: Contact }
   | { type: "ticket.assigned"; ticket: Ticket; assigneeId: string; actorId: string }
-  | { type: "message.failed"; ticket: Ticket; message: Message };
+  | { type: "message.failed"; ticket: Ticket; message: Message }
+  /** With AI: many different customers raised one topic in a short window. Sent once per spike. */
+  | { type: "insights.spike"; spike: Spike };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyAiPlugin = SupportAiPlugin<any>;
@@ -313,6 +318,7 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
         log("error", "ai: an unattended reply couldn't be sent", { ticketId: input.ticketId, error: String(error) });
         return null;
       }),
+    notify: safeNotify,
     now,
     log,
   });
@@ -1338,7 +1344,9 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
       : undefined;
     // Priority needs Copilot's insights; without them it's the longest wait first.
     const sort = query.sort === "priority" && !ai ? "waiting" : query.sort;
-    const { items, total } = await store.listTickets({ ...query, sort, searchCustomerIds });
+    // Topics live in Copilot's tables.
+    const topic = ai ? query.topic : undefined;
+    const { items, total } = await store.listTickets({ ...query, topic, sort, searchCustomerIds });
     const contacts = await store.getContacts([...new Set(items.map((t) => t.contactId))]);
     const customers = await directory.getCustomers([...new Set(items.map((t) => t.customerId).filter((id): id is string => Boolean(id)))]);
     const agents = await agentsById();
@@ -1402,6 +1410,60 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
       accountFacts: facts,
       insight: copilot.insight,
       suggestion: copilot.suggestion,
+    };
+  }
+
+  /**
+   * Insights: how support went from `from` (included) to `to` (not included), next to the period
+   * of the same length before it. `responseTargetMinutes` counts the tickets whose first reply
+   * took longer. `insights.ts` says how each number is defined.
+   */
+  async function stats(input: { from: Date | string; to: Date | string; responseTargetMinutes?: number | null }): Promise<SupportStats> {
+    const from = new Date(input.from);
+    const to = new Date(input.to);
+    if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from >= to) throw new SupportError("invalid", "Choose a period.");
+    if (to.getTime() - from.getTime() > 366 * DAY_MS) throw new SupportError("invalid", "Choose a period of a year or less.");
+    const target = input.responseTargetMinutes && input.responseTargetMinutes > 0 ? input.responseTargetMinutes : null;
+    const range = { from, to, now: now(), targetMs: target === null ? null : target * 60_000 };
+    const before = previousPeriod(from, to);
+    const current = await store.periodTotals(range);
+    const previous = await store.periodTotals({ ...range, ...before });
+    const breakdown = await store.periodBreakdown({ ...range, previousFrom: before.from });
+
+    const days = dayCount(from, to);
+    const backlog = new Map(breakdown.backlog.map((row) => [row.channelId, row.tickets]));
+    const channelIds = [...new Set([...breakdown.days.map((row) => row.channelId), ...backlog.keys()])];
+    const agents = await agentsById().catch(() => new Map<string, Agent>());
+    const customers = await directory.getCustomers(breakdown.customers.map((row) => row.customerId)).catch(() => [] as CustomerSummary[]);
+    const customersById = new Map(customers.map((c) => [c.id, c]));
+    return {
+      from,
+      to,
+      previousFrom: before.from,
+      responseTargetMinutes: target,
+      current,
+      previous,
+      days: daySeries(breakdown.days, days, breakdown.backlog.reduce((sum, row) => sum + row.tickets, 0)),
+      channels: channelIds
+        .map((id) => {
+          const rows = breakdown.days.filter((row) => row.channelId === id);
+          const ch = channel(id);
+          return {
+            id,
+            kind: ch?.kind ?? null,
+            address: ch?.address ?? null,
+            opened: rows.reduce((sum, row) => sum + row.opened, 0),
+            solved: rows.reduce((sum, row) => sum + row.solved, 0),
+            days: daySeries(rows, days, backlog.get(id) ?? 0),
+          };
+        })
+        .sort((a, b) => b.opened - a.opened || a.id.localeCompare(b.id)),
+      agents: breakdown.agents
+        .map(({ agentId, ...load }) => ({ agent: agentId ? (agents.get(agentId) ?? { id: agentId, name: agentId }) : null, ...load }))
+        .sort((a, b) => b.open - a.open || b.solved - a.solved || (a.agent?.name ?? "").localeCompare(b.agent?.name ?? "")),
+      customers: breakdown.customers.map(({ customerId, ...row }) => ({ customer: customersById.get(customerId) ?? { id: customerId, name: customerId }, ...row })),
+      reopened: breakdown.reopened,
+      late: breakdown.late,
     };
   }
 
@@ -1574,7 +1636,7 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
         previewKind: "inbound",
         previewAuthorId: null,
       });
-      if (reopened) await store.insertEvent({ ticketId: ticket.id, type: "reopened", actorId: input.userId, data: {} });
+      if (reopened) await store.insertEvent({ ticketId: ticket.id, type: "reopened", actorId: input.userId, data: {}, createdAt: at });
       await store.markRead(ticket.id, input.userId, at);
       const contact = (await store.getContact(ticket.contactId))!;
       await safeNotify({ type: "ticket.customer_replied", ticket: updated, message: { ...message, attachments: [] }, contact });
@@ -1693,6 +1755,7 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
     attachmentUrl,
     listTickets,
     getTicket,
+    stats,
     counts: (viewerId: string) => store.countTickets({ assigneeId: viewerId }),
     markRead: (ticketId: string, readerId: string) => store.markRead(ticketId, readerId, now()),
     searchCustomers: (query: string) => directory.searchCustomers(query),

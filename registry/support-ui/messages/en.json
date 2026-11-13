@@ -3,7 +3,8 @@
     "open": "Open",
     "waiting": "Waiting on customer",
     "solved": "Solved",
-    "spam": "Spam"
+    "spam": "Spam",
+    "all": "All"
   },
   "inbox": {
     "search": "Search tickets",
@@ -24,13 +25,22 @@
       "waiting": "No tickets are waiting on a customer.",
       "solved": "No solved tickets yet.",
       "spam": "No spam.",
-      "search": "No tickets match your search."
+      "search": "No tickets match your search.",
+      "all": "No tickets match these filters."
     },
     "range": "{from}–{to} of {total}",
     "you": "You",
     "unread": "New activity",
     "noSubject": "(no subject)",
-    "unknownSender": "Unknown sender"
+    "unknownSender": "Unknown sender",
+    "filters": {
+      "topic": "Topic: {value}",
+      "channel": "Channel: {value}",
+      "customer": "Customer: {value}",
+      "opened": "Opened {from} to {to}",
+      "openedSince": "Opened since {from}",
+      "clear": "Clear filters"
+    }
   },
   "ticket": {
     "back": "Support",
@@ -398,5 +408,111 @@
     "previous": "Previous page",
     "next": "Next page",
     "cancel": "Cancel"
+  },
+  "insights": {
+    "period": {
+      "label": "Period",
+      "days": "{days} days"
+    },
+    "before": "{value} in the {days} days before",
+    "noData": "Not enough data yet",
+    "viewTickets": "View tickets",
+    "tickets": "{count} tickets",
+    "speed": {
+      "heading": "Speed",
+      "firstReply": "Time to first reply",
+      "solve": "Time to solve",
+      "p90": "90% within {value}",
+      "breaches": "Missed the response target",
+      "breachesHelp": "Of {opened} opened. Target: first reply within {target}.",
+      "late": "Longest waits for a first reply",
+      "stillWaiting": "{time}, still waiting",
+      "answeredAfter": "answered after {time}"
+    },
+    "quality": {
+      "oneReply": "Solved in one reply",
+      "oneReplyHelp": "{count} of {solved} solved tickets",
+      "replies": "Replies per solved ticket",
+      "reopened": "Reopened",
+      "reopenedList": "Latest reopened"
+    },
+    "volume": {
+      "heading": "Volume",
+      "opened": "Opened",
+      "solved": "Solved",
+      "backlog": "Backlog",
+      "backlogHelp": "Open or waiting at the end of each day",
+      "allChannels": "All channels",
+      "week": "{from} to {to}"
+    },
+    "team": {
+      "heading": "Team",
+      "agent": "Agent",
+      "open": "Open",
+      "waiting": "Waiting",
+      "solved": "Solved",
+      "unassigned": "Unassigned"
+    },
+    "customers": {
+      "heading": "Customers who wrote most",
+      "empty": "No tickets from known customers in this period."
+    },
+    "topics": {
+      "heading": "Topics",
+      "help": "What customers wrote about, from the topic AI or an agent gave each ticket.",
+      "topic": "Topic",
+      "trend": "Trend",
+      "tickets": "Tickets",
+      "accepted": "Drafts accepted",
+      "acceptedHelp": "Drafts sent as written or lightly edited, of those decided in the period",
+      "growing": "Growing fastest",
+      "growth": "{topic}: {now}, up from {before}",
+      "new": "new",
+      "empty": "No tickets with a topic in this period.",
+      "urgency": "Urgency",
+      "mood": "Frustrated or angry customers",
+      "moodShare": "{share} of tickets",
+      "other": "Other"
+    },
+    "urgency": {
+      "urgent": "Urgent",
+      "high": "High",
+      "normal": "Normal",
+      "low": "Low"
+    },
+    "ai": {
+      "heading": "AI",
+      "drafts": "What became of {count} drafts",
+      "noDrafts": "No drafts were decided in this period.",
+      "autopilotSent": "Sent by Autopilot",
+      "usedAsIs": "Sent as drafted",
+      "lightlyEdited": "Lightly edited",
+      "rewritten": "Rewritten",
+      "discarded": "Discarded",
+      "carried": "Sent as drafted or lightly edited",
+      "flagged": "Autopilot replies flagged as wrong",
+      "withDraft": "First reply with a draft ready",
+      "withoutDraft": "First reply without one",
+      "medianOf": "Median of {count} tickets"
+    },
+    "gaps": {
+      "heading": "Open gaps",
+      "help": "Questions the knowledge didn't answer, most asked first.",
+      "count": "{count} tickets",
+      "empty": "No open gaps.",
+      "open": "Open in AI settings"
+    },
+    "spike": {
+      "title": "Likely incident: {topic}",
+      "body": "{customers} customers have raised this since {since}. Usual for this time of day: {usual}.",
+      "bodyNew": "{customers} customers have raised this since {since}. It is usually quiet at this time of day.",
+      "acknowledge": "Acknowledge",
+      "history": "Spikes",
+      "line": "{customers} customers, {tickets} tickets",
+      "ongoing": "Ongoing",
+      "ended": "Ended {when}",
+      "acknowledgedBy": "Acknowledged by {name}",
+      "unacknowledged": "Not acknowledged"
+    }
   }
 }

@@ -30,6 +30,20 @@ import {
   type TopicStage,
   type TrackRecord,
 } from "./autopilot";
+import {
+  DAY_MS,
+  SPIKE_DEFAULTS,
+  dayCount,
+  draftShare,
+  isSpike,
+  previousPeriod,
+  usualVolume,
+  type AiInsights,
+  type MoodCounts,
+  type Spike,
+  type SpikeConfig,
+  type SpikeView,
+} from "./insights";
 import type { KnowledgeSource } from "./knowledge";
 import { changeRatio, cosine, maskNames, safeLesson, searchTerms, sharedTerms } from "./memory";
 import { SupportError, type SupportAiContext, type SupportAiPlugin } from "./service";
@@ -137,6 +151,14 @@ export type SupportAiOptions = {
    * record meets the thresholds here. `false` removes it altogether.
    */
   autopilot?: false | AutopilotOptions;
+  /**
+   * Spikes: when many different customers raise one topic in a short window, well above what the
+   * topic usually gets at that time of day, it is recorded as a likely incident, shown on the
+   * inbox and the dashboard until someone acknowledges it, and sent to your `notify` once as
+   * `insights.spike`. The defaults are 5 customers within 2 hours, at 3 times the usual volume,
+   * judged against the last 14 days. `false` switches detection off.
+   */
+  spikes?: false | Partial<SpikeConfig>;
 };
 
 export type AutopilotOptions = Partial<AutopilotConfig> & {
@@ -1200,6 +1222,81 @@ function createEngine(options: SupportAiOptions, ctx: SupportAiContext) {
     return outcome.sent || outcome.cancelled || outcome.failed || outcome.paused ? outcome : undefined;
   }
 
+  // -------------------------------------------------------------- insights
+
+  const spikeConfig = options.spikes === false ? null : { ...SPIKE_DEFAULTS, ...options.spikes };
+
+  /**
+   * Looks at the last window for topics many different customers raised, and compares each with
+   * what the topic usually gets at this time of day. A new spike is recorded and announced once;
+   * one that is still going has its numbers brought up to date; one the detector hasn't seen for
+   * a whole window is closed.
+   */
+  async function detectSpikes(now: Date) {
+    if (!spikeConfig) return undefined;
+    const windowMs = spikeConfig.windowMinutes * 60_000;
+    const since = new Date(now.getTime() - windowMs);
+    const ongoing = new Map((await store.listSpikes({ ongoing: true, limit: 50 })).map((spike) => [spike.topic, spike]));
+    const outcome = { detected: 0, ended: 0 };
+    const seen = new Set<string>();
+    // A ticket opened this very millisecond belongs to the window too.
+    const until = new Date(now.getTime() + 1);
+    for (const activity of await store.topicActivity({ since, until })) {
+      if (activity.customers < spikeConfig.minCustomers) continue;
+      const history = await store.topicTicketTimes({
+        topic: activity.topic,
+        since: new Date(now.getTime() - (spikeConfig.baselineDays + 1) * DAY_MS),
+        until: since,
+        limit: 10_000,
+      });
+      const usual = usualVolume(history, now, spikeConfig);
+      if (!isSpike(activity, usual, spikeConfig)) continue;
+      seen.add(activity.topic);
+      const current = ongoing.get(activity.topic);
+      if (current) {
+        const [total] = await store.topicActivity({ since: current.startedAt, until, topic: activity.topic });
+        await store.updateSpike(current.id, { lastSeenAt: now, tickets: total?.tickets ?? activity.tickets, customers: total?.customers ?? activity.customers });
+        continue;
+      }
+      const spike = await store.insertSpike({
+        topic: activity.topic,
+        startedAt: activity.firstAt,
+        detectedAt: now,
+        lastSeenAt: now,
+        tickets: activity.tickets,
+        customers: activity.customers,
+        usual,
+      });
+      // Null: another scheduler recorded it a moment ago, and announced it.
+      if (!spike) continue;
+      outcome.detected++;
+      await ctx.notify({ type: "insights.spike", spike });
+    }
+    for (const spike of ongoing.values()) {
+      if (seen.has(spike.topic) || now.getTime() - spike.lastSeenAt.getTime() < windowMs) continue;
+      await store.updateSpike(spike.id, { endedAt: now });
+      outcome.ended++;
+    }
+    return outcome.detected || outcome.ended ? outcome : undefined;
+  }
+
+  /** A spike with who acknowledged it and its latest tickets: the topic's, opened while it lasted. */
+  async function spikeView(spike: Spike): Promise<SpikeView> {
+    const { items } = await ctx.store.listTickets({
+      topic: spike.topic,
+      createdFrom: spike.startedAt,
+      createdTo: spike.endedAt ?? undefined,
+      sort: "recent",
+      limit: 5,
+      offset: 0,
+    });
+    return {
+      ...spike,
+      acknowledgedBy: spike.acknowledgedBy ? ((await ctx.agent(spike.acknowledgedBy)) ?? { id: spike.acknowledgedBy, name: spike.acknowledgedBy }) : null,
+      latest: items.map(({ id, number, subject }) => ({ id, number, subject })),
+    };
+  }
+
   const requirePilot = () => {
     if (!pilot) throw new SupportError("invalid", "Autopilot isn't set up.");
     return pilot;
@@ -1835,6 +1932,7 @@ function createEngine(options: SupportAiOptions, ctx: SupportAiContext) {
         type: "autopilot_flagged",
         actorId: input.actorId,
         data: { messageId: suggestion.sentMessageId, suggestionId: suggestion.id, topic: suggestion.topic, note },
+        createdAt: at,
       });
       const ticket = await ctx.store.getTicket(suggestion.ticketId);
       // The customer holds a wrong answer: the ticket is a person's again.
@@ -1843,6 +1941,98 @@ function createEngine(options: SupportAiOptions, ctx: SupportAiContext) {
         await ctx.store.insertEvent({ ticketId: ticket.id, type: "status_changed", actorId: input.actorId, data: { from: ticket.status, to: "open" } });
       }
     },
+
+    /**
+     * Insights: what the dashboard adds with AI, from `from` (included) to `to` (not included) and
+     * against the period before it. Topics, urgency and mood count the tickets opened in the
+     * period; drafts count the ones decided in it.
+     */
+    async insights(input: { from: Date | string; to: Date | string }): Promise<AiInsights> {
+      const from = new Date(input.from);
+      const to = new Date(input.to);
+      if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from >= to) throw new SupportError("invalid", "Choose a period.");
+      if (to.getTime() - from.getTime() > 366 * DAY_MS) throw new SupportError("invalid", "Choose a period of a year or less.");
+      const before = previousPeriod(from, to);
+      const days = dayCount(from, to);
+
+      const topics = new Map<string, AiInsights["topics"][number]>();
+      const topic = (name: string) => {
+        if (!topics.has(name)) topics.set(name, { topic: name, tickets: 0, before: 0, days: Array.from({ length: days }, () => 0), drafts: 0, accepted: 0 });
+        return topics.get(name)!;
+      };
+      for (const row of await store.topicDays({ from, to })) {
+        const entry = topic(row.topic);
+        entry.tickets += row.tickets;
+        if (row.day >= 0 && row.day < days) entry.days[row.day]! += row.tickets;
+      }
+      for (const row of await store.topicDays(before)) topic(row.topic).before += row.tickets;
+
+      const noMood = (): MoodCounts => ({ calm: 0, confused: 0, frustrated: 0, angry: 0 });
+      const noUrgency = (): Record<Urgency, number> => ({ urgent: 0, high: 0, normal: 0, low: 0 });
+      const mood = { current: noMood(), previous: noMood(), days: Array.from({ length: days }, noMood) };
+      const urgency = { current: noUrgency(), previous: noUrgency() };
+      for (const row of await store.moodDays({ from, to })) {
+        if (row.urgency && URGENCIES.includes(row.urgency)) urgency.current[row.urgency] += row.tickets;
+        if (row.mood && MOODS.includes(row.mood)) {
+          mood.current[row.mood] += row.tickets;
+          if (mood.days[row.day]) mood.days[row.day]![row.mood] += row.tickets;
+        }
+      }
+      for (const row of await store.moodDays(before)) {
+        if (row.urgency && URGENCIES.includes(row.urgency)) urgency.previous[row.urgency] += row.tickets;
+        if (row.mood && MOODS.includes(row.mood)) mood.previous[row.mood] += row.tickets;
+      }
+
+      const decided = await store.draftOutcomes({ from, to });
+      const decidedBefore = await store.draftOutcomes(before);
+      for (const row of decided.outcomes) {
+        if (!row.topic) continue;
+        const entry = topic(row.topic);
+        entry.drafts += row.drafts;
+        if (row.status === "used" || (row.status === "edited" && row.light)) entry.accepted += row.drafts;
+      }
+
+      const gaps = await remembered(() => store.listGaps({ statuses: ["open"] }), []);
+      const spikes = await store.listSpikes({ since: from, until: to, limit: 20 });
+      const spikeViews: SpikeView[] = [];
+      for (const spike of spikes) spikeViews.push(await spikeView(spike));
+      return {
+        from,
+        to,
+        topics: [...topics.values()].filter((t) => t.tickets || t.before).sort((a, b) => b.tickets - a.tickets || a.topic.localeCompare(b.topic)),
+        urgency,
+        mood,
+        drafts: { current: draftShare(decided.outcomes, decided.flagged), previous: draftShare(decidedBefore.outcomes, decidedBefore.flagged) },
+        firstReply: await store.firstReplyByDraft({ from, to }),
+        gaps: gaps.slice(0, 5).map(({ id, theme, count, lastSeenAt }) => ({ id, theme, count, lastSeenAt })),
+        spikes: spikeViews,
+      };
+    },
+
+    /**
+     * Spikes nobody has acknowledged yet, from the last 7 days, newest first: what the inbox and
+     * the dashboard show as likely incidents. With `all`, the acknowledged ones too.
+     */
+    async listSpikes(input: { all?: boolean } = {}): Promise<SpikeView[]> {
+      const since = new Date(ctx.now().getTime() - 7 * DAY_MS);
+      const spikes = await store.listSpikes({ unacknowledged: !input.all, since, limit: 10 });
+      const views: SpikeView[] = [];
+      for (const spike of spikes) views.push(await spikeView(spike));
+      return views;
+    },
+
+    /** An agent has seen a spike: it leaves the inbox and stays on the dashboard, with their name on it. */
+    async acknowledgeSpike(input: { id: string; actorId: string }): Promise<SpikeView> {
+      if (!input.actorId) throw new SupportError("forbidden", "Acknowledging a spike needs to know who did.");
+      const spike = await store.getSpike(input.id);
+      if (!spike) throw new SupportError("not_found", "That spike doesn't exist.");
+      // Acknowledged twice, by two agents: the first one stands.
+      await store.acknowledgeSpike(spike.id, input.actorId, ctx.now());
+      return spikeView((await store.getSpike(spike.id))!);
+    },
+
+    /** Runs the spike check now. `runScheduled` does this on every run. */
+    detectSpikes: () => detectSpikes(ctx.now()),
 
     async discardSuggestion(id: string) {
       await store.decideSuggestion(id, { status: "discarded" }, ctx.now());
@@ -1951,7 +2141,7 @@ function createEngine(options: SupportAiOptions, ctx: SupportAiContext) {
      * Handles what's queued (everything, without `defer`; otherwise what a deferred run left behind),
      * the daily knowledge sync, and memory: lessons from new corrections on every run, guidance
      * suggestions and gaps once a day. With Autopilot: pauses topics whose record slipped, and
-     * sends the held replies whose time has come.
+     * sends the held replies whose time has come. Last, the spike check.
      */
     async runScheduled() {
       const now = ctx.now();
@@ -1979,7 +2169,19 @@ function createEngine(options: SupportAiOptions, ctx: SupportAiContext) {
       } catch (error) {
         ctx.log("error", "ai: autopilot's scheduled work failed (is 0004_autopilot applied?)", { error: String(error) });
       }
-      return { messages: outcome, ...(knowledge ? { knowledge } : {}), ...(memory ? { memory } : {}), ...(autopilot ? { autopilot } : {}) };
+      let spikes: Awaited<ReturnType<typeof detectSpikes>> | undefined;
+      try {
+        spikes = await detectSpikes(now);
+      } catch (error) {
+        ctx.log("error", "ai: the spike check failed (is 0006_insights_ai applied?)", { error: String(error) });
+      }
+      return {
+        messages: outcome,
+        ...(knowledge ? { knowledge } : {}),
+        ...(memory ? { memory } : {}),
+        ...(autopilot ? { autopilot } : {}),
+        ...(spikes ? { spikes } : {}),
+      };
     },
   };
 }

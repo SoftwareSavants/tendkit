@@ -1,7 +1,7 @@
-import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, max, notInArray, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, max, min, ne, notInArray, or, sql } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import { DEFAULT_AI_SETTINGS, URGENCY_RANK, type AiSettings, type AiStore, type AutopilotTopic, type ExampleRow, type InsightRow, type SuggestionRow } from "../ai-store";
-import type { OutcomeRow } from "../autopilot";
+import { LIGHT_EDIT, type OutcomeRow } from "../autopilot";
 import type { ActionRun, ApprovedAnswer, AutopilotBlock, AutopilotState, Gap, GuidanceSuggestion, Mood, Suggestion, SuggestionStatus, Urgency } from "../types";
 import {
   supportActionRuns,
@@ -14,10 +14,12 @@ import {
   supportGapTickets,
   supportGuidanceSuggestions,
   supportKnowledge,
+  supportSpikes,
   supportSuggestions,
   supportTicketInsights,
 } from "./ai-schema";
-import { supportTickets } from "./schema";
+import { supportEvents, supportTickets } from "./schema";
+import { dayOf, distributions, elapsed, firstReplies, num } from "./stats";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = BaseSQLiteDatabase<"async", any, any>;
@@ -572,6 +574,149 @@ export function createD1AiStore(db: Db): AiStore {
         .update(supportSuggestions)
         .set({ flagReviewedAt: at })
         .where(and(eq(supportSuggestions.topic, topic), isNotNull(supportSuggestions.flaggedAt), isNull(supportSuggestions.flagReviewedAt)));
+    },
+    /* Insights (0006_insights_ai.sql). */
+
+    async topicDays({ from, to }) {
+      const rows = await db
+        .select({ day: num(dayOf(sql`${supportTickets.createdAt}`, from)), topic: supportTicketInsights.topic, tickets: count() })
+        .from(supportTickets)
+        .innerJoin(supportTicketInsights, eq(supportTicketInsights.ticketId, supportTickets.id))
+        .where(and(gte(supportTickets.createdAt, from), lt(supportTickets.createdAt, to), ne(supportTickets.status, "spam"), isNotNull(supportTicketInsights.topic)))
+        .groupBy(sql`1`, sql`2`);
+      return rows.map((row) => ({ day: row.day, topic: row.topic!, tickets: Number(row.tickets) }));
+    },
+
+    async moodDays({ from, to }) {
+      const rows = await db
+        .select({
+          day: num(dayOf(sql`${supportTickets.createdAt}`, from)),
+          urgency: supportTicketInsights.urgency,
+          mood: supportTicketInsights.mood,
+          tickets: count(),
+        })
+        .from(supportTickets)
+        .innerJoin(supportTicketInsights, eq(supportTicketInsights.ticketId, supportTickets.id))
+        .where(and(gte(supportTickets.createdAt, from), lt(supportTickets.createdAt, to), ne(supportTickets.status, "spam")))
+        .groupBy(sql`1`, sql`2`, sql`3`);
+      return rows.map((row) => ({ day: row.day, urgency: row.urgency as Urgency | null, mood: row.mood as Mood | null, tickets: Number(row.tickets) }));
+    },
+
+    async draftOutcomes({ from, to }) {
+      const rows = await db
+        .select({
+          topic: supportSuggestions.topic,
+          status: supportSuggestions.status,
+          light: num(sql`case when coalesce(${supportSuggestions.change}, 1) < ${LIGHT_EDIT} then 1 else 0 end`),
+          autopilot: num(sql`case when ${supportSuggestions.autopilot} = 'sent' then 1 else 0 end`),
+          drafts: count(),
+        })
+        .from(supportSuggestions)
+        .where(
+          and(
+            eq(supportSuggestions.kind, "draft"),
+            inArray(supportSuggestions.status, ["used", "edited", "discarded"]),
+            gte(supportSuggestions.decidedAt, from),
+            lt(supportSuggestions.decidedAt, to)
+          )
+        )
+        .groupBy(sql`1`, sql`2`, sql`3`, sql`4`);
+      const [flagged] = await db
+        .select({ replies: count() })
+        .from(supportEvents)
+        .where(and(eq(supportEvents.type, "autopilot_flagged"), gte(supportEvents.createdAt, from), lt(supportEvents.createdAt, to)));
+      return {
+        outcomes: rows.map((row) => ({
+          topic: row.topic,
+          status: row.status as "used" | "edited" | "discarded",
+          light: row.light === 1,
+          autopilot: row.autopilot === 1,
+          drafts: Number(row.drafts),
+        })),
+        flagged: Number(flagged?.replies ?? 0),
+      };
+    },
+
+    async firstReplyByDraft({ from, to }) {
+      const groups = await distributions(
+        db,
+        sql`(select case when exists (select 1 from support_suggestions s where s.ticket_id = r.id and s.kind = 'draft' and s.created_at <= r.replied) then 'draft' else 'none' end as g, ${elapsed(sql`r.replied`, sql`r.asked`)} as d from ${firstReplies(from, to)} where r.replied is not null) durations`,
+        true
+      );
+      const none = { count: 0, median: null, p90: null };
+      return { withDraft: groups.get("draft") ?? none, withoutDraft: groups.get("none") ?? none };
+    },
+
+    async topicActivity({ since, until, topic }) {
+      const rows = await db
+        .select({
+          topic: supportTicketInsights.topic,
+          tickets: count(),
+          customers: num(sql`count(distinct coalesce(${supportTickets.customerId}, cast(${supportTickets.contactId} as text)))`),
+          firstAt: min(supportTickets.createdAt),
+        })
+        .from(supportTickets)
+        .innerJoin(supportTicketInsights, eq(supportTicketInsights.ticketId, supportTickets.id))
+        .where(
+          and(
+            gte(supportTickets.createdAt, since),
+            lt(supportTickets.createdAt, until),
+            ne(supportTickets.status, "spam"),
+            topic !== undefined ? eq(supportTicketInsights.topic, topic) : and(isNotNull(supportTicketInsights.topic), ne(supportTicketInsights.topic, "other"))
+          )
+        )
+        .groupBy(supportTicketInsights.topic);
+      return rows.map((row) => ({ topic: row.topic!, tickets: Number(row.tickets), customers: row.customers, firstAt: row.firstAt! }));
+    },
+
+    async topicTicketTimes({ topic, since, until, limit }) {
+      const rows = await db
+        .select({ at: supportTickets.createdAt })
+        .from(supportTickets)
+        .innerJoin(supportTicketInsights, eq(supportTicketInsights.ticketId, supportTickets.id))
+        .where(and(gte(supportTickets.createdAt, since), lt(supportTickets.createdAt, until), ne(supportTickets.status, "spam"), eq(supportTicketInsights.topic, topic)))
+        .orderBy(desc(supportTickets.createdAt))
+        .limit(limit);
+      return rows.map((row) => row.at);
+    },
+
+    async insertSpike(input) {
+      const [row] = await db.insert(supportSpikes).values(input).onConflictDoNothing().returning();
+      return row ?? null;
+    },
+
+    async updateSpike(id, patch) {
+      await db.update(supportSpikes).set(patch).where(eq(supportSpikes.id, id));
+    },
+
+    async listSpikes({ ongoing, unacknowledged, since, until, limit }) {
+      return db
+        .select()
+        .from(supportSpikes)
+        .where(
+          and(
+            ongoing ? isNull(supportSpikes.endedAt) : undefined,
+            unacknowledged ? isNull(supportSpikes.acknowledgedAt) : undefined,
+            since ? gte(supportSpikes.detectedAt, since) : undefined,
+            until ? lt(supportSpikes.detectedAt, until) : undefined
+          )
+        )
+        .orderBy(desc(supportSpikes.detectedAt), desc(supportSpikes.id))
+        .limit(limit);
+    },
+
+    async getSpike(id) {
+      const [row] = await db.select().from(supportSpikes).where(eq(supportSpikes.id, id)).limit(1);
+      return row ?? null;
+    },
+
+    async acknowledgeSpike(id, by, at) {
+      const rows = await db
+        .update(supportSpikes)
+        .set({ acknowledgedAt: at, acknowledgedBy: by })
+        .where(and(eq(supportSpikes.id, id), isNull(supportSpikes.acknowledgedAt)))
+        .returning({ id: supportSpikes.id });
+      return rows.length > 0;
     },
   };
   return store;

@@ -7,6 +7,7 @@ import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SupportPortalProvider, SupportProvider } from "@/registry/support-ui/provider";
 import { SupportInbox } from "@/registry/support-ui/support-inbox";
+import { SupportInsights } from "@/registry/support-ui/support-insights";
 import { SupportRequest, SupportRequests } from "@/registry/support-ui/support-requests";
 import { SupportTicket } from "@/registry/support-ui/support-ticket";
 import { SupportAiSettings } from "@/registry/support-ui/support-ai-settings";
@@ -39,7 +40,7 @@ function App() {
     })
   );
 
-  const screen: Screen = params.get("screen") === "portal" ? "portal" : params.has("ticket") ? "ticket" : "inbox";
+  const screen: Screen = params.get("screen") === "portal" ? "portal" : params.get("screen") === "insights" ? "insights" : params.has("ticket") ? "ticket" : "inbox";
 
   // Theme changes made on the demo page reach this frame through storage events.
   useEffect(() => {
@@ -55,6 +56,7 @@ function App() {
       if (e.data.settings) setSettings(e.data.settings);
       if (e.data.screen === "inbox") router.replace("/demo-frame");
       if (e.data.screen === "ticket") router.replace("/demo-frame?ticket=tkt_1");
+      if (e.data.screen === "insights") router.replace("/demo-frame?screen=insights");
       if (e.data.screen === "portal") router.replace("/demo-frame?screen=portal");
     };
     window.addEventListener("message", onMessage);
@@ -70,17 +72,24 @@ function App() {
 
   const ticketId = params.get("ticket");
   const aiSettings = params.get("screen") === "ai";
+  const insights = screen === "insights";
   return (
     <SupportProvider
       client={clients.agent}
       viewerId={VIEWER.id}
       inboxHref="/demo-frame"
+      aiSettingsHref="/demo-frame?screen=ai"
       ticketHref={(id) => `/demo-frame?ticket=${id}`}
       responseTargetMinutes={settings.responseTargetMinutes}
       customerPanel={settings.accountPanel ? (detail) => (detail.customer ? <AccountPanel detail={detail} /> : null) : undefined}
     >
-      <AgentShell title={aiSettings ? "AI" : ticketId ? "Ticket" : "Inbox"}>
-        {aiSettings ? (
+      <AgentShell title={insights ? "Insights" : aiSettings ? "AI" : ticketId ? "Ticket" : "Inbox"}>
+        {insights ? (
+          <div className="space-y-5">
+            <h1 className="text-2xl font-semibold tracking-tight">Insights</h1>
+            <SupportInsights />
+          </div>
+        ) : aiSettings ? (
           <div className="space-y-5">
             <h1 className="text-2xl font-semibold tracking-tight">AI</h1>
             <SupportAiSettings />

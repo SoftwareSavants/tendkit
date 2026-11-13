@@ -1,4 +1,5 @@
 import type { OutcomeRow } from "./autopilot";
+import type { Distribution, Spike } from "./insights";
 import type {
   ActionRun,
   ApprovedAnswer,
@@ -7,6 +8,7 @@ import type {
   AutopilotState,
   Gap,
   GuidanceSuggestion,
+  Mood,
   ProposedAction,
   Suggestion,
   SuggestionSource,
@@ -154,6 +156,35 @@ export interface AiStore {
   flagSuggestion(id: string, input: { by: string; note: string | null }, at: Date): Promise<boolean>;
   /** A person looked at a topic's flagged replies: they no longer hold the topic back. */
   reviewFlags(topic: string, at: Date): Promise<void>;
+
+  /* Insights: topics over time, what became of drafts, and spikes. The table and index are in `0006_insights_ai.sql`. */
+
+  /** Tickets opened in a range, by the day they were opened (0 is the range's first 24 hours) and their topic. Spam and tickets Copilot hasn't read are left out. */
+  topicDays(range: { from: Date; to: Date }): Promise<{ day: number; topic: string; tickets: number }[]>;
+  /** The same tickets by day, urgency and mood. */
+  moodDays(range: { from: Date; to: Date }): Promise<{ day: number; urgency: Urgency | null; mood: Mood | null; tickets: number }[]>;
+  /** Drafts decided in a range, by topic and how they ended (`light`: changed by less than `LIGHT_EDIT`), and the Autopilot replies flagged in it. */
+  draftOutcomes(range: { from: Date; to: Date }): Promise<{
+    outcomes: { topic: string | null; status: "used" | "edited" | "discarded"; light: boolean; autopilot: boolean; drafts: number }[];
+    flagged: number;
+  }>;
+  /** Time to first reply on tickets opened in a range, split by whether a draft was ready before the reply went out. */
+  firstReplyByDraft(range: { from: Date; to: Date }): Promise<{ withDraft: Distribution; withoutDraft: Distribution }>;
+  /**
+   * Per topic: the tickets opened from `since` until `until` and the different customers behind
+   * them (a customer, or a contact nobody linked to one). Without `topic`, every topic but "other".
+   */
+  topicActivity(input: { since: Date; until: Date; topic?: string }): Promise<{ topic: string; tickets: number; customers: number; firstAt: Date }[]>;
+  /** When a topic's tickets were opened, newest first: what its usual volume is worked out from. */
+  topicTicketTimes(input: { topic: string; since: Date; until: Date; limit: number }): Promise<Date[]>;
+  /** Records a spike. Returns null when the topic already has one going: another scheduler recorded it first. */
+  insertSpike(input: Omit<Spike, "id" | "endedAt" | "acknowledgedAt" | "acknowledgedBy">): Promise<Spike | null>;
+  updateSpike(id: string, patch: Partial<Pick<Spike, "lastSeenAt" | "endedAt" | "tickets" | "customers">>): Promise<void>;
+  /** Newest first. `since` and `until` are about when a spike was detected. */
+  listSpikes(input: { ongoing?: boolean; unacknowledged?: boolean; since?: Date; until?: Date; limit: number }): Promise<Spike[]>;
+  getSpike(id: string): Promise<Spike | null>;
+  /** Returns false when someone already had. */
+  acknowledgeSpike(id: string, by: string, at: Date): Promise<boolean>;
 }
 
 /** A topic's Autopilot switch, and who set it. */

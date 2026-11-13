@@ -181,14 +181,92 @@ export type TicketDetail = {
 };
 
 export type ListQuery = {
-  status: TicketStatus;
+  /** Left out when a link from Insights asks for every status but spam. */
+  status?: TicketStatus;
   /** "me", an agent id, null for unassigned, undefined for anyone. */
   assignee?: string | null;
   search?: string;
+  /*
+   * What Insights links to. Pass them through to `support.listTickets` as `topic`, `channelId`,
+   * `customerId`, `createdFrom` and `createdTo`.
+   */
+  topic?: string;
+  channel?: string;
+  customerId?: string;
+  createdFrom?: Date;
+  createdTo?: Date;
   /** Sent for open tickets when `ai` is set: most urgent first, then longest waiting. */
   sort?: "priority";
   page: number;
   pageSize: number;
+};
+
+/** Durations in milliseconds. Null when nothing was measured. */
+export type Distribution = { count: number; median: number | null; p90: number | null };
+
+export type PeriodTotals = {
+  opened: number;
+  solved: number;
+  reopened: number;
+  firstReply: Distribution;
+  timeToSolve: Distribution;
+  /** Tickets whose first reply took longer than the response target, or that still wait past it. Null without a target. */
+  breaches: number | null;
+  /** Of the solved tickets: those that got a reply, the replies they took in all, and those solved with one. */
+  answered: number;
+  replies: number;
+  oneReply: number;
+};
+
+export type DaySeries = { opened: number; solved: number; backlog: number };
+export type TicketRef = { id: string; number: number; subject: string | null };
+
+/** `support.stats()`: a period next to the one before it. */
+export type SupportStats = {
+  from: DateLike;
+  to: DateLike;
+  current: PeriodTotals;
+  previous: PeriodTotals;
+  /** One entry per day, oldest first. */
+  days: DaySeries[];
+  channels: { id: string; kind: string | null; address: string | null; opened: number; solved: number; days: DaySeries[] }[];
+  /** `agent` null: nobody is assigned. Open and waiting are as of now. */
+  agents: { agent: Agent | null; open: number; waiting: number; solved: number; solvedBefore: number }[];
+  customers: { customer: Customer; tickets: number; before: number }[];
+  reopened: (TicketRef & { at: DateLike })[];
+  late: (TicketRef & { waitedMs: number; answered: boolean })[];
+};
+
+/** Many different customers raising one topic in a short window: a likely incident. */
+export type Spike = {
+  id: string;
+  topic: string;
+  startedAt: DateLike;
+  detectedAt: DateLike;
+  endedAt: DateLike | null;
+  tickets: number;
+  customers: number;
+  /** Tickets the topic usually gets in a window this long, at this time of day. */
+  usual: number;
+  acknowledgedAt: DateLike | null;
+  acknowledgedBy: Agent | null;
+  /** Its latest tickets. */
+  latest: TicketRef[];
+};
+
+export type DraftShare = { usedAsIs: number; lightlyEdited: number; rewritten: number; discarded: number; autopilotSent: number; autopilotFlagged: number };
+export type MoodCounts = Record<Mood, number>;
+
+/** `support.ai.insights()`: what Insights adds with AI. */
+export type AiInsights = {
+  /** `days` has one count per day. `drafts` were decided in the period; `accepted` went out as drafted or lightly edited. */
+  topics: { topic: string; tickets: number; before: number; days: number[]; drafts: number; accepted: number }[];
+  urgency: { current: Record<Urgency, number>; previous: Record<Urgency, number> };
+  mood: { current: MoodCounts; previous: MoodCounts; days: MoodCounts[] };
+  drafts: { current: DraftShare; previous: DraftShare };
+  firstReply: { withDraft: Distribution; withoutDraft: Distribution };
+  gaps: { id: string; theme: string; count: number; lastSeenAt: DateLike | null }[];
+  spikes: Spike[];
 };
 
 export type RefineInstruction = "shorter" | "friendlier" | "formal" | "translate" | { custom: string };
@@ -355,6 +433,17 @@ export interface SupportAiClient {
   holdAutopilotReply?(input: { suggestionId: string }): Promise<unknown>;
   /** `support.ai.flagAutopilotReply`: marks a reply Autopilot sent as wrong, which pauses its topic. */
   flagAutopilotReply?(input: { suggestionId: string; note?: string }): Promise<unknown>;
+
+  /*
+   * Insights. `insights` adds topics, what became of drafts, gaps and past spikes to the
+   * dashboard. With `listSpikes`, a spike nobody has acknowledged shows at the top of the inbox
+   * and the dashboard; `acknowledgeSpike` (your signed-in agent's id as `actorId`) clears it.
+   */
+  /** `support.ai.insights`. */
+  insights?(input: { from: Date; to: Date }): Promise<AiInsights>;
+  /** `support.ai.listSpikes`: the ones nobody has acknowledged. */
+  listSpikes?(): Promise<Spike[]>;
+  acknowledgeSpike?(input: { id: string }): Promise<unknown>;
 }
 
 export interface SupportClient {
@@ -381,6 +470,8 @@ export interface SupportClient {
   attachmentUrl(input: { id: string }): Promise<string>;
   listAgents(): Promise<Agent[]>;
   searchCustomers(query: string): Promise<Customer[]>;
+  /** `support.stats`: the numbers behind `SupportInsights`. Leave it off if you don't mount that screen. */
+  stats?(input: { from: Date; to: Date; responseTargetMinutes: number }): Promise<SupportStats>;
   ai?: SupportAiClient;
 }
 

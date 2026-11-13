@@ -19,6 +19,15 @@ export function formatDuration(from: DateLike, locale: string, now = Date.now())
   return format(Math.floor(ms / DAY), "day");
 }
 
+/** "12 min", "3.5 hr", "1.4 days": a length of time, as a median or a wait. */
+export function formatSpan(ms: number, locale: string) {
+  const format = (value: number, unit: "minute" | "hour" | "day", digits: number) =>
+    new Intl.NumberFormat(intlLocale(locale), { style: "unit", unit, unitDisplay: "short", maximumFractionDigits: digits }).format(value);
+  if (ms < HOUR) return format(Math.max(1, Math.round(ms / MINUTE)), "minute", 0);
+  if (ms < DAY) return format(ms / HOUR, "hour", 1);
+  return format(ms / DAY, "day", 1);
+}
+
 /** "09:31" today, "Oct 18" this year, "Oct 18, 2025" before. */
 export function formatWhen(value: DateLike, locale: string, now = new Date()) {
   const date = toDate(value);

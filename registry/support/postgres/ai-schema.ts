@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import type { ProposedAction, SuggestionSource } from "../types";
 import { supportTickets } from "./schema";
@@ -114,6 +115,8 @@ export const supportSuggestions = pgTable(
     index("support_suggestions_topic_idx").on(t.topic, t.createdAt),
     index("support_suggestions_autopilot_idx").on(t.autopilot, t.sendAt),
     index("support_suggestions_sent_message_idx").on(t.sentMessageId),
+    /* Insights (0006_insights_ai.sql): what became of the drafts decided in a period. */
+    index("support_suggestions_decided_idx").on(t.decidedAt),
   ]
 );
 
@@ -270,6 +273,34 @@ export const supportAutopilotTopics = pgTable("support_autopilot_topics", {
   updatedAt: at("updated_at").notNull().defaultNow(),
 });
 
+/* Insights (0006_insights_ai.sql): bursts of different customers raising one topic. */
+
+/** One row per spike: when it started, how big it got, and who acknowledged it. */
+export const supportSpikes = pgTable(
+  "support_spikes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    topic: text("topic").notNull(),
+    /** When the first ticket of the burst was opened. */
+    startedAt: at("started_at").notNull(),
+    detectedAt: at("detected_at").notNull(),
+    lastSeenAt: at("last_seen_at").notNull(),
+    /** Set once a whole window has passed without it. */
+    endedAt: at("ended_at"),
+    tickets: integer("tickets").notNull(),
+    customers: integer("customers").notNull(),
+    /** Tickets the topic usually gets in a window this long, at this time of day. */
+    usual: real("usual").notNull().default(0),
+    acknowledgedAt: at("acknowledged_at"),
+    acknowledgedBy: text("acknowledged_by"),
+  },
+  (t) => [
+    index("support_spikes_detected_idx").on(t.detectedAt),
+    /** One spike per topic at a time, however many schedulers run. */
+    uniqueIndex("support_spikes_ongoing_idx").on(t.topic).where(sql`${t.endedAt} is null`),
+  ]
+);
+
 export const supportAiSchema = {
   supportAiSettings,
   supportKnowledge,
@@ -283,4 +314,5 @@ export const supportAiSchema = {
   supportGapTickets,
   supportActionRuns,
   supportAutopilotTopics,
+  supportSpikes,
 };

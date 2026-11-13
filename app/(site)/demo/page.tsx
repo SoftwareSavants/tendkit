@@ -16,6 +16,7 @@ import { setTheme, useTheme } from "@/site/theme";
 const SCREENS: { id: Screen; label: string; description: string }[] = [
   { id: "inbox", label: "Inbox", description: "The shared inbox: what needs an answer, longest wait first." },
   { id: "ticket", label: "Ticket", description: "A conversation with the customer's account beside it. Reply and they write back." },
+  { id: "insights", label: "Insights", description: "How support is going and what customers struggle with. Today's payout spike is at the top." },
   { id: "portal", label: "Portal", description: "What your customers see. Open a request here and it lands in the inbox." },
 ];
 

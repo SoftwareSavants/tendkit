@@ -9,6 +9,7 @@ import type {
   TicketStatus,
 } from "./types";
 import type { ChannelState } from "./channel";
+import type { PeriodBreakdown, PeriodTotals, StatsRange } from "./insights";
 
 /**
  * Everything the service needs from a database. `postgres/store.ts` implements it with Drizzle;
@@ -61,6 +62,13 @@ export interface SupportStore {
   /** When `readerId` last read each ticket. */
   getReadTimes(ticketIds: string[], readerId: string): Promise<Map<string, Date>>;
 
+  /* Insights: see `insights.ts` for how each number is defined. Indexes are in `0005_insights.sql`. */
+
+  /** One period's totals. Called once for the period and once for the one before it. */
+  periodTotals(range: StatsRange): Promise<PeriodTotals>;
+  /** What the period breaks down into: per day and channel, per agent, the top customers, and the tickets behind the numbers. */
+  periodBreakdown(range: StatsRange & { previousFrom: Date }): Promise<PeriodBreakdown>;
+
   getChannelState(channelId: string): Promise<ChannelState | null>;
   setChannelState(channelId: string, state: ChannelState, error?: string | null): Promise<void>;
 }
@@ -109,6 +117,12 @@ export type TicketQuery = {
   /** A user id, or null for unassigned tickets. Omit for everyone's. */
   assigneeId?: string | null;
   customerId?: string;
+  channelId?: string;
+  /** Opened from (included) to (not included). */
+  createdFrom?: Date;
+  createdTo?: Date;
+  /** The topic Copilot or an agent filed it under. Needs the AI tables. */
+  topic?: string;
   /** The customer portal: only tickets this person started. */
   contactUserId?: string;
   search?: string;

@@ -8,7 +8,7 @@ export const RESPONSE_TARGETS = [
   { minutes: 1440, label: "1 day" },
 ] as const;
 
-export type Screen = "inbox" | "ticket" | "portal";
+export type Screen = "inbox" | "ticket" | "insights" | "portal";
 
 /** Messages between the demo page and its frame. */
 export type ToFrame = { source: "tendkit-demo"; screen?: Screen; settings?: DemoSettings };

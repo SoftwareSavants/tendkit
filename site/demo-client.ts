@@ -2,6 +2,7 @@ import type {
   ActionField,
   ActionRun,
   Agent,
+  AiInsights,
   AiSettings,
   ApprovedAnswer,
   AutopilotExample,
@@ -15,6 +16,9 @@ import type {
   PortalMessage,
   PortalTicket,
   ProposedAction,
+  DaySeries,
+  PeriodTotals,
+  Spike,
   Suggestion,
   SupportClient,
   SupportPortalClient,
@@ -40,6 +44,9 @@ import type {
  * And Autopilot: each topic's track record is written here as the weeks of agents' work a real
  * install computes it from. One topic is ready, one is on (with a reply waiting out its delay and
  * one already sent), one is paused. Switching, stopping and flagging behave as the service does.
+ * And Insights: months of history don't fit in a browser tab, so the dashboard's totals are
+ * generated here (the same every visit), while the spike is real: six customers wrote about
+ * payouts in the last hour, and those tickets are in the inbox.
  */
 
 export const VIEWER: Agent = { id: "agent_you", name: "Alex Chen" };
@@ -149,6 +156,7 @@ type State = {
   answers: ApprovedAnswer[];
   guidanceSuggestions: GuidanceSuggestion[];
   gaps: Gap[];
+  spikes: Spike[];
   autopilot: Omit<AutopilotOverview, "topics"> & { topics: AutopilotTopic[]; examples: Record<string, AutopilotExample[]> };
   messages: Map<string, TimelineMessage[]>;
   events: Map<string, TimelineEvent[]>;
@@ -224,6 +232,7 @@ function seed(): State {
     ],
     guidanceSuggestions: [],
     gaps: [],
+    spikes: [],
     autopilot: { stopped: false, stoppedBy: null, stoppedAt: null, minDrafts: 30, minRate: 0.9, floor: { minDrafts: 30, minRate: 0.9 }, windowDays: 30, holdMinutes: 10, topics: [], examples: {} },
     seq: 1040,
     messages: new Map(),
@@ -515,6 +524,57 @@ function seed(): State {
     },
   });
 
+  // A spike: in the last hour, six different customers wrote that today's payout hasn't arrived.
+  const late: [name: string, identity: string, account: string | null, ago: number, subject: string, text: string][] = [
+    ["Tom Becker", "tom@atlasfreight.test", "acc_atlas", 68, "Today's payout hasn't arrived", "Today's payout hasn't arrived. It normally lands before 9. Is something wrong on your side?"],
+    ["Lucia Romero", "lucia@clinicasol.test", "acc_sol", 55, "Payout expected this morning is missing", "We were expecting our payout this morning and nothing has come in. Can you check?"],
+    ["Giulia Rossi", "giulia@rossi.studio", "acc_rossi", 41, "Marked as paid, nothing at the bank", "No payout today? The dashboard says paid but our bank shows nothing."],
+    ["Ingrid Larsen", "ingrid@nordvik.test", "acc_nordvik", 33, "Payout paid but not received", "Our payout is marked as paid but hasn't reached the bank. Two of our stores are asking."],
+    ["Mateo Alvarez", "mateo@harborbooks.test", "acc_harbor", 19, "First payout didn't arrive", "Our first payout was due today and it isn't in our account. Did we set something up wrong?"],
+    ["Hana Sato", "hana@kumo.test", null, 12, "Is today's payout delayed?", "Hi, today's payout is missing. Is there a delay?"],
+  ];
+  for (const [name, identity, account, ago, subject, text] of late) {
+    add({
+      channel: "email",
+      name,
+      identity,
+      account,
+      subject,
+      status: "open",
+      thread: [{ kind: "inbound", ago, text }],
+      ai: { insight: { topic: "Payouts", urgency: "high", urgencyReason: "A payout is late", mood: "calm", language: "en", summary: "Today's payout hasn't reached their bank" }, suggestion: null },
+    });
+  }
+  const payoutTickets = state.tickets.slice(-late.length);
+  state.spikes = [
+    {
+      id: "spike_payouts",
+      topic: "Payouts",
+      startedAt: minutes(68),
+      detectedAt: minutes(18),
+      endedAt: null,
+      tickets: payoutTickets.length,
+      customers: payoutTickets.length,
+      usual: 1.4,
+      acknowledgedAt: null,
+      acknowledgedBy: null,
+      latest: [...payoutTickets].reverse().slice(0, 5).map(({ id, number, subject }) => ({ id, number, subject })),
+    },
+    {
+      id: "spike_access",
+      topic: "Account access",
+      startedAt: minutes(9 * 24 * 60 + 95),
+      detectedAt: minutes(9 * 24 * 60 + 50),
+      endedAt: minutes(9 * 24 * 60 - 190),
+      tickets: 14,
+      customers: 11,
+      usual: 2.1,
+      acknowledgedAt: minutes(9 * 24 * 60 + 41),
+      acknowledgedBy: AGENTS[1]!,
+      latest: [],
+    },
+  ];
+
   // What the team's work has taught so far, pointing at the tickets above.
   const about = (subject: string) => {
     const t = state.tickets.find((x) => x.subject === subject)!;
@@ -530,8 +590,8 @@ function seed(): State {
     },
   ];
   state.gaps = [
-    { id: "gap_annual", theme: "Discount for annual billing", count: 1, lastSeenAt: minutes(48), tickets: [about("Do you offer annual billing?")] },
-    { id: "gap_export", theme: "CSV export stops at 1,000 rows", count: 1, lastSeenAt: minutes(720), tickets: [about("Export to CSV isn't showing all rows")] },
+    { id: "gap_annual", theme: "Discount for annual billing", count: 6, lastSeenAt: minutes(48), tickets: [about("Do you offer annual billing?")] },
+    { id: "gap_export", theme: "CSV export stops at 1,000 rows", count: 9, lastSeenAt: minutes(720), tickets: [about("Export to CSV isn't showing all rows")] },
   ];
 
   const invoice = about("Where do I download last month's invoice?");
@@ -857,7 +917,13 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
   const agentClient: SupportClient = {
     async listTickets(q) {
       const term = q.search?.toLowerCase();
-      let items = s.tickets.filter((t) => t.status === q.status);
+      let items = s.tickets.filter((t) => (q.status ? t.status === q.status : t.status !== "spam"));
+      // What Insights links to: a topic, a channel, a customer, the days tickets were opened in.
+      if (q.topic) items = items.filter((t) => s.insights.get(t.id)?.topic === q.topic);
+      if (q.channel) items = items.filter((t) => t.channel === q.channel);
+      if (q.customerId) items = items.filter((t) => t.customerId === q.customerId);
+      if (q.createdFrom) items = items.filter((t) => +new Date(t.createdAt) >= +q.createdFrom!);
+      if (q.createdTo) items = items.filter((t) => +new Date(t.createdAt) < +q.createdTo!);
       if (q.assignee === "me") items = items.filter((t) => t.assigneeId === VIEWER.id);
       else if (q.assignee === null) items = items.filter((t) => !t.assigneeId);
       else if (q.assignee) items = items.filter((t) => t.assigneeId === q.assignee);
@@ -1013,7 +1079,80 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
       return delay(ACCOUNTS.filter((a) => a.name.toLowerCase().includes(q)).map(({ id, name }) => ({ id, name })));
     },
 
+    // The period's totals are generated (see `sample` below); who holds what right now, the longest waits and the reopened tickets are the inbox's own.
+    async stats({ from, to, responseTargetMinutes }) {
+      const days = Math.max(1, Math.ceil((+to - +from) / DAY_MS));
+      const now = Date.now();
+      const live = s.tickets.filter((t) => t.status !== "spam");
+      const agents = [...AGENTS.map((a) => a as Agent | null), null].map((agent) => {
+        const mine = live.filter((t) => (t.assigneeId ?? null) === (agent?.id ?? null));
+        const share = agent ? [0.41, 0.34, 0.25][AGENTS.indexOf(agent)]! : 0;
+        return {
+          agent,
+          open: mine.filter((t) => t.status === "open").length,
+          waiting: mine.filter((t) => t.status === "waiting").length,
+          solved: Math.round(sample.totals(days, 0, responseTargetMinutes).solved * share),
+          solvedBefore: Math.round(sample.totals(days, days, responseTargetMinutes).solved * share * 0.97),
+        };
+      });
+      const firstInbound = (t: Ticket) => s.messages.get(t.id)!.find((m) => m.kind === "inbound");
+      const firstReply = (t: Ticket) => s.messages.get(t.id)!.find((m) => m.kind === "outbound");
+      const late = live
+        .flatMap((t) => {
+          const asked = firstInbound(t);
+          const replied = firstReply(t);
+          if (!asked || (!replied && t.status !== "open")) return [];
+          const waitedMs = +(replied ? new Date(replied.createdAt) : now) - +new Date(asked.createdAt);
+          return waitedMs > responseTargetMinutes * 60_000 ? [{ id: t.id, number: t.number, subject: t.subject, waitedMs, answered: Boolean(replied) }] : [];
+        })
+        .sort((a, b) => b.waitedMs - a.waitedMs)
+        .slice(0, 5);
+      const reopened = live
+        .flatMap((t) => {
+          const event = s.events.get(t.id)!.findLast((e) => e.type === "reopened");
+          return event ? [{ id: t.id, number: t.number, subject: t.subject, at: event.createdAt }] : [];
+        })
+        .slice(0, 5);
+      const share = [0.46, 0.21, 0.14, 0.11, 0.08];
+      const opened = sample.totals(days, 0, responseTargetMinutes).opened;
+      const before = sample.totals(days, days, responseTargetMinutes).opened;
+      return delay({
+        from,
+        to,
+        current: sample.totals(days, 0, responseTargetMinutes),
+        previous: sample.totals(days, days, responseTargetMinutes),
+        days: sample.series(days, null),
+        channels: (Object.keys(CHANNELS) as ChannelKind[]).map((id) => {
+          const series = sample.series(days, id);
+          return { id, kind: CHANNELS[id].kind, address: id === "email" ? CHANNELS[id].address : `${CHANNELS[id].address} (${id === "sms" ? "SMS" : "WhatsApp"})`, opened: series.reduce((sum, day) => sum + day.opened, 0), solved: series.reduce((sum, day) => sum + day.solved, 0), days: series };
+        }),
+        agents: agents.sort((a, b) => b.open - a.open || b.solved - a.solved),
+        customers: ACCOUNTS.slice(0, 5).map(({ id, name }, i) => ({
+          customer: { id, name },
+          tickets: Math.max(1, Math.round(opened * 0.09 * share[i]! * 2)),
+          before: Math.round(before * 0.09 * share[i]! * 2 * [0.7, 1.15, 0.9, 1.3, 1][i]!),
+        })).sort((a, b) => b.tickets - a.tickets),
+        reopened,
+        late,
+      });
+    },
+
     ai: {
+      async insights({ from, to }) {
+        const days = Math.max(1, Math.ceil((+to - +from) / DAY_MS));
+        return delay({ ...sample.ai(days), gaps: s.gaps.map(({ id, theme, count, lastSeenAt }) => ({ id, theme, count, lastSeenAt })).sort((a, b) => b.count - a.count), spikes: s.spikes.filter((spike) => +new Date(spike.detectedAt) >= +from) });
+      },
+
+      async listSpikes() {
+        return delay(s.spikes.filter((spike) => !spike.acknowledgedAt));
+      },
+
+      async acknowledgeSpike({ id }) {
+        const spike = s.spikes.find((x) => x.id === id);
+        if (spike && !spike.acknowledgedAt) Object.assign(spike, { acknowledgedAt: new Date(), acknowledgedBy: VIEWER });
+        return delay({ ok: true });
+      },
+
       async refine({ ticketId, text, instruction }) {
         const custom = typeof instruction === "object" ? instruction.custom.toLowerCase() : "";
         const kind =
@@ -1361,6 +1500,148 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
 
   return { agent: agentClient, portal };
 }
+
+// ----------------------------------------------------------------- Insights
+
+const DAY_MS = 86_400_000;
+const TOPIC_NAMES = ["Billing", "Payouts", "Account access", "Exports", "other"] as const;
+
+/**
+ * Sample history for the dashboard: what months of tickets would add up to, generated from the
+ * date so it reads the same on every visit. The story it tells: replies got faster as drafts
+ * took over, Exports is the topic growing fastest (its drafts are the ones agents rewrite, and
+ * its gap is open), and Payouts jumped today.
+ */
+const sample = (() => {
+  /** A steady pseudo-random number in 0..1 for a day and a purpose. */
+  const noise = (day: number, salt: number) => {
+    const x = Math.sin(day * 12.9898 + salt * 78.233) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  const today = () => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return { index: Math.floor(start.getTime() / DAY_MS), elapsed: Math.max(0.05, (Date.now() - start.getTime()) / DAY_MS) };
+  };
+  const BASE: Record<ChannelKind, number> = { email: 21, whatsapp: 7, sms: 3 };
+  const opened = (ago: number, channel: ChannelKind) => {
+    const { index, elapsed } = today();
+    const weekday = new Date((index - ago) * DAY_MS + DAY_MS / 2).getDay();
+    const rhythm = weekday === 0 ? 0.3 : weekday === 6 ? 0.4 : weekday === 1 ? 1.2 : 1;
+    const growth = 1 + 0.2 * (1 - Math.min(ago, 180) / 180);
+    const value = BASE[channel] * rhythm * growth * (0.75 + 0.5 * noise(index - ago, channel.length));
+    return Math.round(value * (ago === 0 ? elapsed : 1)) + (ago === 0 && channel === "email" ? 6 : 0);
+  };
+  const solved = (ago: number, channel: ChannelKind) => Math.round(0.55 * opened(ago, channel) + 0.43 * opened(ago + 1, channel));
+  const channels = Object.keys(BASE) as ChannelKind[];
+  const sum = (from: number, to: number, value: (ago: number) => number) => {
+    let total = 0;
+    for (let ago = from; ago < to; ago++) total += value(ago);
+    return total;
+  };
+  const all = (pick: (ago: number, channel: ChannelKind) => number) => (ago: number) => channels.reduce((total, channel) => total + pick(ago, channel), 0);
+  const MINUTE = 60_000;
+
+  /** Each topic's share of a day's tickets. Exports doubles over the last month; Payouts jumps today. */
+  const topicShare = (ago: number) => {
+    const exports = 0.07 + 0.09 * Math.max(0, 1 - ago / 30);
+    const payouts = ago === 0 ? 0.38 : 0.2;
+    const rest = 1 - exports - payouts;
+    return { Billing: rest * 0.4, Payouts: payouts, "Account access": rest * 0.26, Exports: exports, other: rest * 0.34 };
+  };
+
+  return {
+    totals(days: number, offset: number, targetMinutes: number): PeriodTotals {
+      const count = sum(offset, offset + days, all(opened));
+      const done = sum(offset, offset + days, all(solved));
+      const middle = offset + days / 2;
+      const firstReply = (34 + 0.28 * middle) * MINUTE;
+      const solve = (5.6 + 0.022 * middle) * 60 * MINUTE;
+      const answered = Math.round(done * 0.96);
+      const missed = Math.min(0.6, (0.07 + 0.0007 * middle) * Math.sqrt(240 / Math.max(15, targetMinutes)));
+      return {
+        opened: count,
+        solved: done,
+        reopened: Math.round(done * (0.031 + 0.00008 * middle)),
+        firstReply: { count: Math.round(count * 0.97), median: firstReply, p90: firstReply * 5.4 },
+        timeToSolve: { count: done, median: solve, p90: solve * 5.8 },
+        breaches: Math.round(count * missed),
+        answered,
+        replies: Math.round(answered * (1.62 + 0.0022 * middle)),
+        oneReply: Math.round(answered * (0.6 - 0.0009 * middle)),
+      };
+    },
+
+    /** Oldest day first. The backlog is walked back from what is open today. */
+    series(days: number, channel: ChannelKind | null): DaySeries[] {
+      const pick = (value: (ago: number, channel: ChannelKind) => number) => (ago: number) => (channel ? value(ago, channel) : all(value)(ago));
+      const series: DaySeries[] = [];
+      let backlog = channel ? Math.round(BASE[channel] * 1.4) : 44;
+      for (let ago = 0; ago < days; ago++) {
+        const day = { opened: pick(opened)(ago), solved: pick(solved)(ago), backlog: Math.max(0, backlog) };
+        series.unshift(day);
+        backlog = backlog - day.opened + day.solved;
+      }
+      return series;
+    },
+
+    ai(days: number): Omit<AiInsights, "gaps" | "spikes"> {
+      const { index } = today();
+      const accepted: Record<string, number> = { Billing: 0.94, Payouts: 0.89, "Account access": 0.72, Exports: 0.48, other: 0.66 };
+      const count = (topic: (typeof TOPIC_NAMES)[number], ago: number) => Math.round(all(opened)(ago) * topicShare(ago)[topic]);
+      const topics = TOPIC_NAMES.map((topic) => {
+        const tickets = sum(0, days, (ago) => count(topic, ago));
+        const drafts = Math.round(tickets * 0.82);
+        return {
+          topic,
+          tickets,
+          before: sum(days, 2 * days, (ago) => count(topic, ago)),
+          days: Array.from({ length: days }, (_, i) => count(topic, days - 1 - i)),
+          drafts,
+          accepted: Math.round(drafts * accepted[topic]!),
+        };
+      }).sort((a, b) => b.tickets - a.tickets);
+      const total = (from: number, to: number) => sum(from, to, (ago) => TOPIC_NAMES.reduce((n, topic) => n + count(topic, ago), 0));
+      const urgency = (n: number, urgent: number) => ({ urgent: Math.round(n * urgent), high: Math.round(n * 0.15), normal: Math.round(n * 0.61), low: n - Math.round(n * urgent) - Math.round(n * 0.15) - Math.round(n * 0.61) });
+      const mood = (ago: number) => {
+        const n = TOPIC_NAMES.reduce((m, topic) => m + count(topic, ago), 0);
+        const upset = Math.round(n * (0.09 + 0.07 * noise(index - ago, 7) + (ago === 0 ? 0.12 : 0)));
+        const angry = Math.round(upset * 0.25);
+        const confused = Math.round(n * 0.2);
+        return { calm: n - upset - confused, confused, frustrated: upset - angry, angry };
+      };
+      const moods = (from: number, to: number) => {
+        const totals = { calm: 0, confused: 0, frustrated: 0, angry: 0 };
+        for (let ago = from; ago < to; ago++) for (const [key, value] of Object.entries(mood(ago))) totals[key as keyof typeof totals] += value;
+        return totals;
+      };
+      const share = (n: number, autopilot: number) => {
+        const decided = Math.round(n * 0.8);
+        const sent = Math.round(decided * autopilot);
+        const rest = decided - sent;
+        return {
+          autopilotSent: sent,
+          usedAsIs: Math.round(rest * 0.52),
+          lightlyEdited: Math.round(rest * 0.2),
+          rewritten: Math.round(rest * 0.16),
+          discarded: rest - Math.round(rest * 0.52) - Math.round(rest * 0.2) - Math.round(rest * 0.16),
+          autopilotFlagged: sent > 40 ? 1 : 0,
+        };
+      };
+      const n = total(0, days);
+      return {
+        topics,
+        urgency: { current: urgency(n, 0.045), previous: urgency(total(days, 2 * days), 0.04) },
+        mood: { current: moods(0, days), previous: moods(days, 2 * days), days: Array.from({ length: days }, (_, i) => mood(days - 1 - i)) },
+        drafts: { current: share(n, 0.14), previous: share(total(days, 2 * days), 0.05) },
+        firstReply: {
+          withDraft: { count: Math.round(n * 0.8), median: 19 * MINUTE, p90: 96 * MINUTE },
+          withoutDraft: { count: Math.round(n * 0.17), median: 132 * MINUTE, p90: 11 * 60 * MINUTE },
+        },
+      };
+    },
+  };
+})();
 
 /** The agent client only, for places that don't need the portal. */
 export function createDemoClient(onChange: () => void): SupportClient {

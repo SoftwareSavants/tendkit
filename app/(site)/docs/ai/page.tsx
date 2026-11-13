@@ -365,7 +365,8 @@ export default function Ai() {
           <Code title="db/schema.ts" lang="ts" code={`export * from "@/lib/support/postgres/ai-schema";`} className="mt-1" />
           <p className="mt-3 text-muted-foreground">
             Then generate and apply a migration with Drizzle as usual. <code>lib/support/postgres/0001_ai.sql</code>,{" "}
-            <code>0002_memory.sql</code>, <code>0003_actions.sql</code> and <code>0004_autopilot.sql</code> are the reference.
+            <code>0002_memory.sql</code>, <code>0003_actions.sql</code>, <code>0004_autopilot.sql</code> and{" "}
+            <code>0006_insights_ai.sql</code> are the reference.
           </p>
         </Step>
         <Step title="Give it a model and your docs">

@@ -5,6 +5,7 @@ import {
   desc,
   eq,
   exists,
+  gte,
   ilike,
   inArray,
   isNull,
@@ -27,6 +28,7 @@ import {
   supportReads,
   supportTickets,
 } from "./schema";
+import { periodBreakdown, periodTotals } from "./stats";
 
 // Any Drizzle Postgres database: postgres-js, node-postgres, Neon, PGlite, …
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -302,6 +304,9 @@ export function createPostgresStore(db: Db): SupportStore {
       return new Map(rows.map((r) => [r.ticketId, r.readAt]));
     },
 
+    periodTotals: (range) => periodTotals(db, range),
+    periodBreakdown: (range) => periodBreakdown(db, range),
+
     async getChannelState(channelId) {
       const [row] = await db
         .select()
@@ -331,6 +336,17 @@ function ticketFilters(query: Parameters<SupportStore["listTickets"]>[0]): (SQL 
   if (query.assigneeId === null) filters.push(isNull(supportTickets.assigneeId));
   else if (query.assigneeId) filters.push(eq(supportTickets.assigneeId, query.assigneeId));
   if (query.customerId) filters.push(eq(supportTickets.customerId, query.customerId));
+  if (query.channelId) filters.push(eq(supportTickets.channelId, query.channelId));
+  if (query.createdFrom) filters.push(gte(supportTickets.createdAt, query.createdFrom));
+  if (query.createdTo) filters.push(lt(supportTickets.createdAt, query.createdTo));
+  if (query.topic) {
+    // Raw SQL, so this file doesn't depend on the AI schema.
+    filters.push(
+      exists(
+        sql`(select 1 from support_ticket_insights where support_ticket_insights.ticket_id = ${supportTickets.id} and support_ticket_insights.topic = ${query.topic})`
+      )
+    );
+  }
   if (query.contactUserId) {
     filters.push(
       exists(

@@ -36,6 +36,20 @@
       "when": 1794531962620,
       "tag": "0004_autopilot",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794533743580,
+      "tag": "0005_insights",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794533987649,
+      "tag": "0006_insights_ai",
+      "breakpoints": true
     }
   ]
 }

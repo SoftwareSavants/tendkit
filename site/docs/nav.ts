@@ -17,6 +17,7 @@ export const DOCS: DocGroup[] = [
     title: "Screens",
     pages: [
       { title: "Inbox and tickets", href: "/docs/screens", description: "Mount SupportInbox and SupportTicket behind your own API and auth." },
+      { title: "Insights", href: "/docs/insights", description: "A dashboard next to the inbox: response times, volume, backlog, topics, AI drafts and spikes." },
       { title: "Customer portal", href: "/docs/portal", description: "Let customers open and follow their requests inside your app." },
       { title: "Theming", href: "/docs/theming", description: "The screens use your shadcn/ui components and tokens. Change anything." },
     ],

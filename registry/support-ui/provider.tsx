@@ -29,6 +29,8 @@ type SupportContextValue = {
   viewerId: string;
   ticketHref: (id: string) => string;
   inboxHref: string;
+  /** Where `SupportAiSettings` is mounted, so Insights can link a gap to the list it is in. */
+  aiSettingsHref?: string;
   /** Your product's view of the customer next to a ticket: their account, orders, payments… */
   customerPanel?: (detail: TicketDetail) => ReactNode;
   /** Minutes a customer may wait before "Waiting" turns red. Amber from three quarters of it. */

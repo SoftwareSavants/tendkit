@@ -425,7 +425,7 @@ function Gaps() {
   if (!ai?.listGaps) return null;
 
   return (
-    <section className="space-y-2 border-t pt-6">
+    <section id="support-gaps" className="scroll-mt-6 space-y-2 border-t pt-6">
       <div className="space-y-1">
         <h2 className="text-sm font-medium">{t("ai.gaps.heading")}</h2>
         <p className="text-sm text-muted-foreground">{t("ai.gaps.help")}</p>
