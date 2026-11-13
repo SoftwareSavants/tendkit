@@ -1,4 +1,5 @@
 import { changeRatio } from "./memory";
+import type { Outreach } from "./proactive";
 import type { AutopilotBlock, AutopilotMode, AutopilotState, Mood, SuggestionStatus, Urgency } from "./types";
 
 /**
@@ -244,6 +245,31 @@ export function topicStage(setting: { status: "on" | "paused" | "off" } | null |
   if (setting?.status === "on") return "on";
   if (setting?.status === "paused") return "paused";
   return isEligible(record, config) ? "eligible" : "collecting";
+}
+
+/**
+ * One decided proposal as Autopilot's track record reads it, so a kind earns sending on its own
+ * the way a topic does: sent as drafted or lightly edited counts for it, rewritten or dismissed
+ * against it. Null for proposals nobody decided on, and for an incident's messages.
+ */
+export function outreachOutcome(row: Pick<Outreach, "id" | "kind" | "language" | "status" | "change" | "auto" | "ticketId" | "createdAt" | "decidedAt" | "draft" | "spikeId">): OutcomeRow | null {
+  if (row.spikeId || !row.draft || (row.status !== "sent" && row.status !== "dismissed")) return null;
+  const edited = row.status === "sent" && (row.change ?? 0) > 0;
+  return {
+    suggestionId: row.id,
+    ticketId: row.ticketId ?? "",
+    topic: row.kind,
+    language: row.language,
+    kind: "draft",
+    status: row.status === "dismissed" ? "discarded" : edited ? "edited" : "used",
+    change: row.change,
+    autopilot: row.auto ? "sent" : null,
+    followUp: null,
+    flaggedAt: null,
+    flagReviewedAt: null,
+    createdAt: row.createdAt,
+    decidedAt: row.decidedAt,
+  };
 }
 
 export type { AutopilotMode };

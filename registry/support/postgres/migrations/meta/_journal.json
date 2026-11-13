@@ -50,6 +50,13 @@
       "when": 1794533987649,
       "tag": "0006_insights_ai",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794535575187,
+      "tag": "0007_proactive",
+      "breakpoints": true
     }
   ]
 }

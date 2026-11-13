@@ -70,6 +70,8 @@ export function telegramChannel(options: TelegramChannelOptions): Channel {
       conversation: "contact",
       replyWindowHours: null,
       deliveryReceipts: false,
+      // A bot can only write to people who wrote to it first.
+      canStartConversation: false,
     },
 
     async webhook(request) {

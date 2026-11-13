@@ -138,15 +138,20 @@ export default function Service() {
       <Props
         rows={[
           { name: "handleWebhook", type: "(channelId, request) => Response", description: <>For your webhook route. See <Link href="/docs/webhooks">Webhooks</Link>.</> },
-          { name: "runScheduled", type: "() => Promise<summary>", description: "Polls channels, renews subscriptions, fails sends that never finished. With AI, also handles queued messages and the daily knowledge sync." },
+          { name: "runScheduled", type: "() => Promise<summary>", description: "Polls channels, renews subscriptions, fails sends that never finished. With AI, also handles queued messages, the daily knowledge sync, and outreach that is waiting to be drafted or due to send." },
           { name: "ingest", type: "(channelId, event)", description: "Feed an event directly, for tests or custom transports." },
           { name: "listTickets / getTicket / counts", type: "", description: "What the inbox and ticket screens read. getTicket includes accountFacts from your directory's describeCustomer." },
           { name: "reply / retry / addNote", type: "", description: "Send a reply (status and attachments included), retry a failed one, or add an internal note." },
+          { name: "startTicket", type: "({ to, text, agentId, channelId?, customerId?, cc?, subject?, attachmentIds? }) => { ticket, message }", description: <>Opens a ticket by writing to a customer first: Waiting on customer, assigned to the agent, sent like a reply. <code>to</code> is <code>{"{ contactId }"}</code> or <code>{"{ address, name? }"}</code>. See <Link href="/docs/proactive#start-a-conversation">Start a conversation</Link>.</> },
+          { name: "listChannels", type: "() => { id, kind, address, identityKind, capabilities, startBlockedReason, default }[]", description: <>Your channels, with whether your team can write first on each (<code>startBlockedReason</code> is null, &quot;needs_template&quot; or &quot;not_supported&quot;) and which one a new conversation uses by default.</> },
+          { name: "listContacts", type: "({ customerId?, search?, limit? }) => { id, name, identities, customer }[]", description: "A customer's people, or the people matching a search: who a new conversation can go to. Blocked people are left out. Empty without a customer or a search; limit defaults to 20, at most 50." },
+          { name: "signal", type: "({ customerId, kind, title, facts?, dedupeKey?, to? }) => SignalResult", description: <>Something your product noticed that a customer should hear about. With AI it becomes a drafted message in the Outreach queue; the result is proposed, duplicate or suppressed with a reason. Without AI it answers suppressed with &quot;unavailable&quot;. See <Link href="/docs/proactive#signals">Signals</Link>.</> },
           { name: "assign / setStatus / linkCustomer", type: "", description: "Assignment, status (open, waiting, solved, spam) and linking a sender to a customer." },
           { name: "changeContact", type: "({ ticketId, address, actorId })", description: "Makes someone else the ticket's contact. Replies go to them, and they're matched to an account as usual." },
-          { name: "uploadAttachment / attachmentUrl", type: "", description: "Agent uploads, and short-lived download links with access checks." },
+          { name: "uploadAttachment / attachmentUrl", type: "", description: "Agent uploads, and short-lived download links with access checks. uploadAttachment takes ticketId: null for a file that startTicket is about to send; only its uploader can send it." },
           { name: "searchCustomers / listAgents / markRead", type: "", description: "Pickers and read state per agent." },
           { name: "portal.list / get / create / reply", type: "", description: <>The customer portal. See <Link href="/docs/portal">Customer portal</Link>.</> },
+          { name: "portal.ask / rateAnswer / escalate", type: "", description: <>With AI: the portal&apos;s Ask box, its thumbs and its hand-off to a ticket. See <Link href="/docs/proactive#self-serve">Self-serve</Link>.</> },
           { name: "ai.*", type: "", description: <>Only when <code>ai</code> is configured. See <Link href="/docs/ai#methods">AI</Link>.</> },
         ]}
       />

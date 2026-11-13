@@ -123,6 +123,8 @@ export function whatsappChannel(options: WhatsAppChannelOptions): Channel {
       conversation: "contact",
       replyWindowHours: 24,
       deliveryReceipts: true,
+      // Writing first needs an approved template, which this adapter doesn't send.
+      canStartConversation: false,
     },
 
     async webhook(request) {

@@ -1,5 +1,6 @@
 import type { OutcomeRow } from "./autopilot";
 import type { Distribution, Spike } from "./insights";
+import type { AskSession, AskTurn, Outreach, OutreachStatus, SelfServeStats, SuppressReason } from "./proactive";
 import type {
   ActionRun,
   ApprovedAnswer,
@@ -185,7 +186,98 @@ export interface AiStore {
   getSpike(id: string): Promise<Spike | null>;
   /** Returns false when someone already had. */
   acknowledgeSpike(id: string, by: string, at: Date): Promise<boolean>;
+
+  /* Proactive and self-serve: signals, outreach and the portal's Ask box. The tables are in `0007_proactive.sql`. */
+
+  /** Records a signal. Returns null when one with the same `dedupeKey` exists. */
+  insertSignal(input: NewSignal): Promise<{ id: string } | null>;
+  /** The proposal an earlier signal with this key led to, when it led to one. */
+  signalByKey(dedupeKey: string): Promise<{ id: string; outreachId: string | null } | null>;
+  /** What became of a signal. */
+  setSignalOutcome(id: string, outcome: { status: "proposed" | "duplicate" | "suppressed"; reason?: SuppressReason | null; outreachId?: string | null }): Promise<void>;
+  /** Signals that became proposals since `since`. */
+  countProposedSignals(since: Date): Promise<number>;
+
+  /** Returns null when the customer already has a message about this spike. */
+  insertOutreach(input: NewOutreach): Promise<Outreach | null>;
+  getOutreach(id: string): Promise<Outreach | null>;
+  updateOutreach(id: string, patch: OutreachPatch): Promise<void>;
+  /** Newest first. `since` is about when it was created. */
+  listOutreach(input: { statuses?: OutreachStatus[]; customerId?: string; kind?: string; spikeId?: string; since?: Date; limit: number }): Promise<Outreach[]>;
+  /** Proposals created before `before` whose message isn't written yet, with fewer than `maxAttempts` tries, oldest first. */
+  listOutreachToDraft(input: { before: Date; maxAttempts: number; limit: number }): Promise<Outreach[]>;
+  /** Held messages whose time has come, oldest first. */
+  listOutreachDue(input: { dueBefore: Date; limit: number }): Promise<Outreach[]>;
+  /**
+   * Moves a message out of one of the `from` states, once, in one conditional update: false when
+   * it is no longer in any of them. Whoever gets true acts on it (sends it, dismisses it, stops
+   * it); everyone else leaves it alone.
+   */
+  moveOutreach(id: string, from: OutreachStatus[], patch: OutreachPatch): Promise<boolean>;
+  /** Messages that went out since `since`: all of them, or only the ones nobody read first. */
+  countOutreachSent(input: { since: Date; auto?: boolean }): Promise<number>;
+  /** How many messages went out about each of these spikes. */
+  countSpikeOutreach(spikeIds: string[]): Promise<Map<string, number>>;
+  /** Every kind someone switched on at some point, whatever its status now. */
+  listOutreachKinds(): Promise<OutreachKind[]>;
+  saveOutreachKind(kind: OutreachKind): Promise<void>;
+  /** Pauses a kind that is on. Returns false when it wasn't on. */
+  pauseOutreachKind(kind: string, at: Date): Promise<boolean>;
+  /** The kinds signals have arrived with, most recent first. */
+  listSignalKinds(since: Date): Promise<{ kind: string; title: string; lastAt: Date }[]>;
+
+  insertAskSession(input: { customerId: string; userId: string; createdAt: Date }): Promise<AskSession>;
+  getAskSession(id: string): Promise<AskSession | null>;
+  /** Adds a question and what came of it. */
+  addAskTurn(id: string, turn: AskTurn, at: Date): Promise<void>;
+  updateAskSession(id: string, patch: { helpful?: boolean | null; ticketId?: string | null }): Promise<void>;
+  /** Questions a customer asked since `since`, across their conversations. */
+  countAskQuestions(customerId: string, since: Date): Promise<number>;
+  /**
+   * Conversations started in a range. `quietBefore`: one whose last question is older than this,
+   * with no ticket from that person since it started, counts as resolved without a ticket.
+   */
+  selfServeStats(range: { from: Date; to: Date; quietBefore: Date }): Promise<SelfServeStats>;
 }
+
+export type NewSignal = { customerId: string; kind: string; title: string; facts: { label: string; value: string; url?: string | null }[]; dedupeKey: string | null; createdAt: Date };
+
+export type NewOutreach = Pick<Outreach, "signalId" | "spikeId" | "customerId" | "kind" | "title" | "facts" | "contactId" | "channelId" | "status" | "createdAt"> &
+  Partial<Pick<Outreach, "subject" | "text" | "draft" | "sources" | "language" | "confident" | "sendAt" | "decidedBy">>;
+
+export type OutreachPatch = Partial<
+  Pick<
+    Outreach,
+    | "contactId"
+    | "channelId"
+    | "subject"
+    | "text"
+    | "draft"
+    | "sources"
+    | "language"
+    | "confident"
+    | "status"
+    | "sendAt"
+    | "autoBlock"
+    | "attempts"
+    | "lastError"
+    | "ticketId"
+    | "messageId"
+    | "decidedBy"
+    | "auto"
+    | "change"
+    | "decidedAt"
+  >
+>;
+
+/** An outreach kind's switch for sending on its own, and who set it. */
+export type OutreachKind = {
+  kind: string;
+  status: "on" | "paused" | "off";
+  enabledBy: string | null;
+  enabledAt: Date | null;
+  pausedAt: Date | null;
+};
 
 /** A topic's Autopilot switch, and who set it. */
 export type AutopilotTopic = {
@@ -221,6 +313,8 @@ export type AiSettings = {
   /** The team's own thresholds, when stricter than the ones in code. */
   autopilotMinDrafts: number | null;
   autopilotMinRate: number | null;
+  /** The portal's Ask box answers customers. Off until someone on the team switches it on. */
+  selfServe: boolean;
 };
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
@@ -235,6 +329,7 @@ export const DEFAULT_AI_SETTINGS: AiSettings = {
   autopilotStoppedBy: null,
   autopilotMinDrafts: null,
   autopilotMinRate: null,
+  selfServe: false,
 };
 
 export type KnowledgeRow = {

@@ -186,6 +186,7 @@ export function gmailChannel(options: GmailChannelOptions): Channel {
       conversation: "thread",
       replyWindowHours: null,
       deliveryReceipts: false,
+      canStartConversation: true,
     },
 
     async sync(previous) {

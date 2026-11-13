@@ -472,6 +472,7 @@ export function microsoft365Channel(options: Microsoft365ChannelOptions): Channe
       replyWindowHours: null,
       // Graph only confirms that it accepted the message; bounces arrive later as Inbox mail.
       deliveryReceipts: false,
+      canStartConversation: true,
     },
 
     async webhook(request) {

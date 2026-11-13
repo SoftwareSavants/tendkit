@@ -105,6 +105,7 @@ export default function Screens() {
         { id: "implement-the-client", title: "Implement the client" },
         { id: "mount-the-screens", title: "Mount the screens" },
         { id: "provider-props", title: "Provider props" },
+        { id: "writing-first", title: "Writing first" },
         { id: "ai", title: "AI" },
         { id: "translations", title: "Translations" },
       ]}
@@ -143,6 +144,28 @@ export default function Screens() {
       <Callout title="Try the props">
         The <Link href="/demo">demo</Link> lets you change the theme, the response target and the account panel live.
       </Callout>
+
+      <H2 id="writing-first">Writing first</H2>
+      <p>
+        Add <code>startTicket</code> to the client and the inbox shows New ticket, and a ticket&apos;s customer card
+        shows Message: a dialog (<code>NewTicketDialog</code>, in <code>new-ticket-dialog.tsx</code>) where an agent
+        picks a person or types an address, writes a subject and a message, and sends. The ticket opens as Waiting on
+        customer, assigned to them. Leave <code>startTicket</code> off and both buttons are hidden.
+      </p>
+      <Props
+        rows={[
+          { name: "startTicket", type: "(input) => Promise<{ ticketId }>", description: "support.startTicket with your signed-in agent's id as agentId on the server. Return the new ticket's id." },
+          { name: "listChannels", type: "() => Promise<StartChannel[]>", description: "support.listChannels(). Lets the agent choose the channel and explains the ones that can't write first." },
+          { name: "listContacts", type: "({ customerId?, search? }) => Promise<Recipient[]>", description: "support.listContacts. Finds people the inbox already knows." },
+          { name: "uploadForNewTicket", type: "({ file }) => Promise<FileInfo>", description: "support.uploadAttachment with ticketId: null and your agent's id as uploadedBy. Adds attachments to the dialog." },
+        ]}
+      />
+      <p>
+        With AI, <code>client.ai.draftOpening</code> adds a draft from one line of intent to the dialog, and{" "}
+        <code>client.ai.listOutreach</code> adds an Outreach tab to the inbox: the messages proposed from your
+        product&apos;s signals, for an agent to send, edit or dismiss. See{" "}
+        <Link href="/docs/proactive">Proactive and self-serve</Link>.
+      </p>
 
       <H2 id="ai">AI</H2>
       <p>

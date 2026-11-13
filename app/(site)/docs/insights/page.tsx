@@ -184,6 +184,14 @@ export default function Insights() {
           <strong>Gaps.</strong> The open gaps most tickets ran into, from{" "}
           <Link href="/docs/ai#memory">Memory</Link>, linking to AI settings.
         </li>
+        <li>
+          <strong>Questions answered before a ticket.</strong> When the portal&apos;s{" "}
+          <Link href="/docs/proactive#self-serve">Ask box</Link> is on: the conversations customers started in it, how
+          many got an answer, how many ended without a ticket, and how many were handed to your team. A conversation
+          counts as answered before a ticket when the customer gave a thumbs-up, or gave no rating, asked nothing more
+          for 24 hours and opened no ticket since it began. It needs <code>0007_proactive.sql</code>; see{" "}
+          <Link href="/docs/proactive#deflection">Deflection</Link>.
+        </li>
       </ul>
 
       <H2 id="spikes">Spikes</H2>
@@ -211,6 +219,13 @@ export default function Insights() {
         <li>
           Add <code>listSpikes</code> and <code>acknowledgeSpike</code> to <code>client.ai</code> for the banner and
           its button. Acknowledging records who and when; the first agent stands.
+        </li>
+        <li>
+          Once a spike is acknowledged, &quot;Message customers&quot; writes to every customer who wrote in about it:
+          one ticket each, on one approval, and never twice for the same spike. Add <code>previewBroadcast</code> and{" "}
+          <code>sendBroadcast</code> to <code>client.ai</code> to show it. Each spike then carries{" "}
+          <code>messaged</code>, the number of customers written to. See{" "}
+          <Link href="/docs/proactive#broadcast">Incident broadcast</Link>.
         </li>
         <li>
           <code>spikes: false</code> switches detection off.

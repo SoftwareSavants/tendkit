@@ -11,7 +11,7 @@ import { SupportInsights } from "@/registry/support-ui/support-insights";
 import { SupportRequest, SupportRequests } from "@/registry/support-ui/support-requests";
 import { SupportTicket } from "@/registry/support-ui/support-ticket";
 import { SupportAiSettings } from "@/registry/support-ui/support-ai-settings";
-import { VIEWER, createDemoClients } from "@/site/demo-client";
+import { VIEWER, createDemoClients, demoSignal } from "@/site/demo-client";
 import { AccountPanel } from "@/site/demo/account-panel";
 import { AgentShell, CustomerShell } from "@/site/demo/app-shell";
 import { DEFAULT_SETTINGS, type DemoSettings, type FromFrame, type Screen, type ToFrame } from "@/site/demo/settings";
@@ -97,10 +97,35 @@ function App() {
         ) : ticketId ? (
           <SupportTicket key={ticketId} ticketId={ticketId} />
         ) : (
-          <SupportInbox />
+          <div className="space-y-4">
+            <SupportInbox />
+            <SignalControl />
+          </div>
         )}
       </AgentShell>
     </SupportProvider>
+  );
+}
+
+/** Demo only: stands in for your product calling `support.signal()`. The proposal lands in the Outreach tab. */
+function SignalControl() {
+  const router = useRouter();
+  const [left, setLeft] = useState(true);
+  if (!left) return null;
+  return (
+    <p className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-dashed px-4 py-3 text-sm text-muted-foreground">
+      In your app, your product reports what it notices with support.signal().
+      <button
+        type="button"
+        className="font-medium text-foreground underline underline-offset-2"
+        onClick={() => {
+          if (!demoSignal()) return setLeft(false);
+          router.replace("/demo-frame?status=outreach");
+        }}
+      >
+        Report a signal
+      </button>
+    </p>
   );
 }
 

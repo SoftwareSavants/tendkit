@@ -22,6 +22,11 @@ export interface SupportStore {
   findContactByIdentity(identity: Identity): Promise<Contact | null>;
   getContact(id: string): Promise<Contact | null>;
   getContacts(ids: string[]): Promise<Contact[]>;
+  /**
+   * The people of a customer, or the people whose name or address holds `search`, most recently
+   * updated first. For choosing who a new conversation goes to.
+   */
+  listContacts(query: { customerId?: string; userId?: string; search?: string; limit: number }): Promise<Contact[]>;
   createContact(input: NewContact): Promise<Contact>;
   updateContact(id: string, patch: Partial<Pick<Contact, "name" | "customerId" | "userId" | "locale" | "blockedAt">>): Promise<void>;
   /** Ignored when the identity already belongs to someone. */
@@ -50,7 +55,7 @@ export interface SupportStore {
   /** Outbound messages stuck in "queued" since before `before` (the sender crashed). */
   listStaleQueued(before: Date): Promise<Message[]>;
 
-  insertAttachment(input: Omit<Attachment, "id"> & { ticketId: string; uploadedBy?: string | null }): Promise<Attachment>;
+  insertAttachment(input: Omit<Attachment, "id"> & { ticketId: string | null; uploadedBy?: string | null }): Promise<Attachment>;
   getAttachment(id: string): Promise<(Attachment & { ticketId: string | null; uploadedBy: string | null }) | null>;
   /** Attaches uploaded files to the message they were sent with. */
   linkAttachments(ids: string[], messageId: string): Promise<void>;

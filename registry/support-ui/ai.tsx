@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useSupport } from "./provider";
-import type { RefineInstruction, Suggestion, TicketDetail, Urgency } from "./client";
+import type { RefineInstruction, Suggestion, SuggestionSource, TicketDetail, Urgency } from "./client";
 
 /*
  * The AI parts of the screens. Each one renders only when the client has `ai`, so apps without
@@ -182,12 +182,17 @@ export function DraftBar({
 
 /** What a suggested reply is based on, each with its link when it has one. */
 export function SuggestionSources({ suggestion }: { suggestion: Suggestion }) {
+  return <Sources sources={suggestion.sources} />;
+}
+
+/** What a drafted reply or message is based on. */
+export function Sources({ sources }: { sources: SuggestionSource[] }) {
   const { t } = useSupport();
-  if (!suggestion.sources.length) return null;
+  if (!sources.length) return null;
   return (
     <ul className="flex flex-wrap items-center gap-1.5 text-xs">
       <li className="text-muted-foreground">{t("ai.sources")}</li>
-      {suggestion.sources.map((source) => {
+      {sources.map((source) => {
         const label = source.type === "guidance" ? t("ai.guidance") : source.title;
         const chip = "inline-flex max-w-56 items-center rounded-md border bg-background px-1.5 py-0.5 text-foreground";
         return (

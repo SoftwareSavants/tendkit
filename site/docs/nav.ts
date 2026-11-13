@@ -26,6 +26,7 @@ export const DOCS: DocGroup[] = [
     title: "AI",
     pages: [
       { title: "AI", href: "/docs/ai", description: "Optional: triage, suggested replies from your docs, a memory of what your team teaches it, and Autopilot for the topics that have earned it, with any AI SDK model." },
+      { title: "Proactive and self-serve", href: "/docs/proactive", description: "Write to customers before they ask, tell everyone an incident affects on one approval, and let the portal answer from your docs and the customer's own account." },
     ],
   },
   {

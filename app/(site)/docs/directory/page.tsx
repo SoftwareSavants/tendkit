@@ -69,6 +69,7 @@ export default function Directory() {
           { name: "getCustomers", type: "(ids) => { id, name }[]", required: true, description: "Names for the customers shown in the inbox." },
           { name: "listAgents", type: "() => { id, name, email? }[]", required: true, description: "Who can be assigned. The agent id is what your API passes as agentId. With an email, their own email to the support address counts as your team's." },
           { name: "describeCustomer", type: "(customerId) => { label, value, url? }[]", description: <>A few lines about the account (plan, balance, last order), shown in the ticket&apos;s sidebar and used by <Link href="/docs/ai#account-facts">AI</Link>. Only called for tickets linked to a customer.</> },
+          { name: "outreachContact", type: "({ customerId, kind }) => { address, name?, locale? } | null", description: <>Who at a customer should hear about a <Link href="/docs/proactive#signals">signal</Link> of this kind, such as the billing contact for a failing payout or the developer for a failing webhook. Without it, or when it returns null or throws, the message goes to the person at the customer who wrote to you last.</> },
         ]}
       />
       <p>

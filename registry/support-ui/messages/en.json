@@ -4,7 +4,8 @@
     "waiting": "Waiting on customer",
     "solved": "Solved",
     "spam": "Spam",
-    "all": "All"
+    "all": "All",
+    "outreach": "Outreach"
   },
   "inbox": {
     "search": "Search tickets",
@@ -40,7 +41,8 @@
       "opened": "Opened {from} to {to}",
       "openedSince": "Opened since {from}",
       "clear": "Clear filters"
-    }
+    },
+    "newTicket": "New ticket"
   },
   "ticket": {
     "back": "Support",
@@ -82,9 +84,12 @@
       "actionRan": "{actor} ran {title}",
       "actionFailed": "{actor} ran {title}, and it didn't go through",
       "actionUnconfirmed": "{actor} ran {title}, and it didn't confirm",
-      "autopilotFlagged": "{actor} flagged Autopilot's reply as wrong"
+      "autopilotFlagged": "{actor} flagged Autopilot's reply as wrong",
+      "started": "{actor} started this conversation",
+      "startedAuto": "Sent automatically from a signal"
     },
-    "account": "Account"
+    "account": "Account",
+    "message": "Message"
   },
   "composer": {
     "reply": "Reply",
@@ -193,7 +198,9 @@
       "neverSynced": "Not synced yet",
       "sync": "Sync now",
       "save": "Save changes",
-      "saved": "Saved"
+      "saved": "Saved",
+      "selfServe": "Answer customers in the portal",
+      "selfServeHelp": "Signed-in customers get instant answers from your knowledge, your approved answers and their own account. What it can't answer becomes a request for your team."
     },
     "answers": {
       "heading": "Approved answers",
@@ -362,6 +369,51 @@
         "moved_on": "the ticket changed before it was due",
         "send_failed": "it couldn't be sent"
       }
+    },
+    "outreach": {
+      "heading": "Outreach",
+      "help": "Messages drafted from what your product reports, before the customer asks. An agent sends each one until its kind has earned sending on its own.",
+      "empty": "Nothing is waiting. Messages appear here when your product reports something a customer should hear about.",
+      "to": "To {name}",
+      "noContact": "Nobody to write to",
+      "drafting": "Writing the message…",
+      "notDrafted": "AI couldn't write this one: {reason}",
+      "write": "Write the message",
+      "send": "Send",
+      "edit": "Edit",
+      "dismiss": "Dismiss",
+      "subject": "Subject",
+      "message": "Message",
+      "held": "Sends at {time} unless you stop it.",
+      "stop": "Stop",
+      "left": "It waits for you: {reason}.",
+      "block": {
+        "stopped": "Autopilot is stopped",
+        "not_confident": "it wasn't sure of the message",
+        "unsourced": "the message isn't fully backed by your sources",
+        "hourly_cap": "it reached its hourly limit",
+        "held_back": "an agent stopped it"
+      },
+      "failed": "It couldn't be delivered: {reason}",
+      "openTicket": "Open the ticket",
+      "recent": "Recently decided",
+      "sent": "Sent by {name}",
+      "sentAuto": "Sent automatically",
+      "dismissed": "Dismissed by {name}",
+      "kindsHeading": "Outreach that sends on its own",
+      "kindsHelp": "Each kind of message your product reports earns this separately. Once on, a message waits {minutes} minutes in the Outreach queue, where any agent can stop it. Stopping Autopilot stops these too.",
+      "kindsRule": "A kind is ready after {drafts} messages in {days} days with {rate}% sent as drafted or lightly edited.",
+      "kindsEmpty": "No signals yet. Kinds appear here once your product reports them.",
+      "evidence": "{good} of the last {drafts} messages sent as drafted or lightly edited ({rate}%)",
+      "progress": "{drafts} of {needed} messages so far",
+      "pausedNote": "Paused {when}: too few of its recent messages went out as drafted. It can resume once the record recovers.",
+      "counts": {
+        "used": "{count} as drafted",
+        "light": "{count} lightly edited",
+        "heavy": "{count} rewritten",
+        "discarded": "{count} dismissed"
+      },
+      "sentOnItsOwn": "{count} sent on their own"
     }
   },
   "contact": {
@@ -396,7 +448,30 @@
     "you": "You",
     "team": "Support",
     "replyPlaceholder": "Write a reply…",
-    "emailNote": "We'll also email you when we reply."
+    "emailNote": "We'll also email you when we reply.",
+    "ask": {
+      "label": "Ask a question",
+      "placeholder": "When will my payout arrive?",
+      "submit": "Ask",
+      "thinking": "Looking into it…",
+      "sources": "Based on",
+      "account": "Your account: {label}",
+      "helpful": "Did this answer your question?",
+      "yes": "Yes",
+      "no": "No",
+      "thanks": "Thanks for telling us.",
+      "person": "Ask the team instead",
+      "handoff": {
+        "cannot_answer": "I don't have a reliable answer to that. Our team will know.",
+        "asked_for_human": "Of course. Send this to our team and a person will reply.",
+        "blocked": "I can't help with that here. Our team can.",
+        "limit": "That's as far as I can help for now. Our team can take it from here."
+      },
+      "handoffLabel": "Your message to the team",
+      "handoffNote": "They'll see what you asked and what was answered here.",
+      "send": "Send to the team",
+      "failed": "Couldn't get an answer. Try again, or send a request."
+    }
   },
   "errors": {
     "load": "Couldn't load this. Check your connection and try again.",
@@ -512,7 +587,65 @@
       "ongoing": "Ongoing",
       "ended": "Ended {when}",
       "acknowledgedBy": "Acknowledged by {name}",
-      "unacknowledged": "Not acknowledged"
+      "unacknowledged": "Not acknowledged",
+      "messaged": "{count} customers messaged"
+    },
+    "selfServe": {
+      "heading": "Self-serve",
+      "deflected": "Questions answered before a ticket",
+      "deflectedOf": "Of {count} conversations in the portal",
+      "escalated": "Handed to the team",
+      "helpful": "Marked helpful",
+      "helpfulOf": "Of {count} rated"
     }
+  },
+  "newTicket": {
+    "title": "New ticket",
+    "description": "Write to a customer first. Their reply comes back to this ticket.",
+    "to": "To",
+    "toPlaceholder": "Search customers and people, or type an address",
+    "customers": "Customers",
+    "people": "People",
+    "writeTo": "Write to {address}",
+    "noPeople": "Nobody at {name} has written yet. Type their address.",
+    "change": "Change",
+    "channel": "Channel",
+    "blocked": {
+      "needs_template": "{channel} only accepts a first message from an approved template.",
+      "not_supported": "{channel} can't start a conversation: the customer has to write first."
+    },
+    "addCc": "Add Cc",
+    "cc": "Cc",
+    "ccPlaceholder": "Addresses, separated by commas",
+    "subject": "Subject",
+    "message": "Message",
+    "attach": "Attach files",
+    "remove": "Remove {name}",
+    "intent": "Say what it should tell them, and AI drafts it",
+    "intentPlaceholder": "Their payouts are failing since Monday",
+    "draft": "Draft",
+    "send": "Send"
+  },
+  "broadcast": {
+    "open": "Message customers",
+    "title": "Message customers about {topic}",
+    "description": "Each customer gets this as their own ticket, from you. Their replies come back to it.",
+    "intentPlaceholder": "Payouts are delayed by a few hours, nothing is needed from them",
+    "subject": "Subject",
+    "message": "Message",
+    "placeholders": "{name} and {company} are filled in for each customer.",
+    "recipients": "{count} customers",
+    "none": "Everyone affected has already been written to.",
+    "preview": "As {name} will read it",
+    "skipped": {
+      "unlinked": "Left out, not linked to a customer: {count}",
+      "alreadyMessaged": "Already written to about this: {count}",
+      "unreachable": "Left out, no address to write to: {count}"
+    },
+    "send": "Send to {count} customers",
+    "done": "Sent to {count} customers.",
+    "queued": "{count} more are on their way.",
+    "failed": "{count} couldn't be delivered. Each has a ticket with the failed message.",
+    "close": "Close"
   }
 }

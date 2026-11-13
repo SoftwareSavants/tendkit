@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Code } from "@/site/code";
 import { Callout, DocsShell, H2, Props } from "@/site/docs/shell";
 
@@ -48,6 +49,7 @@ export default function Portal() {
         { id: "how-it-works", title: "How it works" },
         { id: "api", title: "API" },
         { id: "screens", title: "Screens" },
+        { id: "ask", title: "The Ask box" },
         { id: "access", title: "Who sees what" },
       ]}
     >
@@ -66,12 +68,34 @@ export default function Portal() {
       <Code title="app/support" lang="tsx" code={PAGES} />
       <Props
         rows={[
-          { name: "client", type: "SupportPortalClient", required: true, description: "list, get, create, reply and attachmentUrl, backed by your API." },
+          { name: "client", type: "SupportPortalClient", required: true, description: "list, get, create, reply and attachmentUrl, backed by your API. Optional: ask, rateAnswer and escalate for the Ask box." },
           { name: "listHref", type: "string", required: true, description: "The requests list." },
           { name: "requestHref", type: "(id) => string", required: true, description: "One request." },
           { name: "t / locale", type: "", description: "As for the agent screens." },
         ]}
       />
+
+      <H2 id="ask">The Ask box</H2>
+      <p>
+        With <Link href="/docs/ai">AI</Link>, <code>SupportRequests</code> can show an Ask box above the requests (
+        <code>SupportAsk</code>, in <code>support-ask.tsx</code>). A customer types a question and gets an answer at
+        once, written from your docs, your approved answers and their own account, with its sources and a thumbs-up
+        or thumbs-down. When it can&apos;t answer, or the customer asks for a person, it offers to send the question to
+        your team as a request that carries what was asked and what was already tried.
+      </p>
+      <p>
+        It appears when the portal client has <code>ask</code> and <code>list()</code> returns <code>ask: true</code>,
+        which <code>support.portal.list</code> does once your team has switched instant answers on in AI settings. Add{" "}
+        <code>ask</code>, <code>rateAnswer</code> and <code>escalate</code> to your client, backed by{" "}
+        <code>support.portal.ask</code>, <code>rateAnswer</code> and <code>escalate</code> with the{" "}
+        <code>customerId</code> and <code>userId</code> from your session. See{" "}
+        <Link href="/docs/proactive#self-serve">Self-serve in the portal</Link> for the wiring, what it answers from
+        and what keeps it safe.
+      </p>
+      <p>
+        Tickets your team starts with <Link href="/docs/proactive#start-a-conversation">New ticket</Link> or sends from
+        the Outreach queue show in the customer&apos;s portal like any other, as unread.
+      </p>
 
       <H2 id="access">Who sees what</H2>
       <Callout>

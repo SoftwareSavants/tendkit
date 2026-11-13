@@ -1,6 +1,7 @@
 import {
   ChannelError,
   WebhookError,
+  startBlockedReason,
   type Channel,
   type ChannelEvent,
   type InboundMessage,
@@ -20,6 +21,7 @@ import {
 } from "./text";
 import type { SupportStore, TicketQuery } from "./store";
 import { DAY_MS, dayCount, daySeries, previousPeriod, type Spike, type SupportStats } from "./insights";
+import type { AskResult, SignalInput, SignalResult } from "./proactive";
 import type {
   AccountFact,
   Address,
@@ -63,6 +65,12 @@ export interface SupportDirectory {
    * ticket's Customer card and, with Copilot, for drafting that customer's replies.
    */
   describeCustomer?(customerId: string): Promise<AccountFact[]>;
+  /**
+   * Optional: who at a customer should hear about a signal of this kind, such as the billing
+   * contact for a failing payout or the developer for a failing webhook. Without it, or when it
+   * answers null, the message goes to the person at the customer who wrote to you last.
+   */
+  outreachContact?(input: { customerId: string; kind: string }): Promise<{ address: string; name?: string | null; locale?: string | null } | null>;
 }
 
 /**
@@ -94,6 +102,16 @@ export type SupportAiContext = {
   sendUnattended(input: { ticketId: string; text: string; signature: string | null }): Promise<Message | null>;
   /** Your `notify`, for what Copilot finds on its own (a spike). Never throws. */
   notify(notification: SupportNotification): Promise<void>;
+  /**
+   * Opens a ticket by writing to a customer first (`startTicket`). `agentId` null sends it from
+   * the team with `signature` and no author: only outreach the team let send on its own does that.
+   * Throws a SupportError when the message can't be sent to this person.
+   */
+  startConversation(input: StartTicketInput & { agentId: string | null; signature?: string | null; data?: Record<string, unknown> }): Promise<{ ticket: Ticket; message: Message }>;
+  /** The channel a conversation starts on when none is named, or null when no channel can. */
+  startChannel(): { id: string; kind: Channel["kind"]; identityKind: Identity["kind"]; subject: boolean; maxTextLength: number | null } | null;
+  /** `directory.outreachContact`, or null. Never throws. */
+  outreachContact(input: { customerId: string; kind: string }): Promise<{ address: string; name?: string | null; locale?: string | null } | null>;
   now: () => Date;
   log: NonNullable<SupportOptions["log"]>;
 };
@@ -114,7 +132,34 @@ export interface SupportAiEngine<Api = unknown> {
   ticketDetail(ticketId: string): Promise<{ insight: TicketInsight | null; suggestion: SuggestionView | null }>;
   listDetails(ticketIds: string[]): Promise<Map<string, { urgency: Urgency | null; summary: string | null; draftReady: boolean }>>;
   runScheduled(): Promise<Record<string, unknown>>;
+  /** `support.signal`. */
+  signal(input: SignalInput): Promise<SignalResult>;
+  /** The portal's Ask box. The service checks who is asking; the engine answers for that customer only. */
+  selfServe: {
+    enabled(): Promise<boolean>;
+    ask(input: { customerId: string; userId: string; question: string; sessionId?: string | null }): Promise<AskResult>;
+    rate(input: { customerId: string; userId: string; sessionId: string; helpful: boolean }): Promise<void>;
+    /** What a hand-off carries to the ticket: the question as its subject and message, and the note for the agent. */
+    handOff(input: { customerId: string; userId: string; sessionId: string }): Promise<{ subject: string; text: string; note: string }>;
+    handedOff(input: { sessionId: string; ticketId: string }): Promise<void>;
+  };
 }
+
+/** Who a new conversation goes to: someone the inbox already knows, or an address. */
+export type StartTicketInput = {
+  /** Defaults to `portalChannelId` when it can write first, else your first email channel, else the first channel that can. */
+  channelId?: string;
+  to: { contactId: string } | { address: string; name?: string | null };
+  /** The customer to file it under, when the person isn't linked to one yet. */
+  customerId?: string | null;
+  /** Email only. */
+  cc?: Address[];
+  /** Required on channels with a subject. */
+  subject?: string;
+  text: string;
+  /** From `uploadAttachment` with no ticket. */
+  attachmentIds?: string[];
+};
 
 export type SupportNotification =
   | { type: "ticket.created"; ticket: Ticket; message: Message; contact: Contact }
@@ -319,6 +364,20 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
         return null;
       }),
     notify: safeNotify,
+    startConversation: (input) => openConversation(input),
+    startChannel: () => {
+      const ch = defaultStartChannel();
+      return ch ? { id: ch.id, kind: ch.kind, identityKind: ch.identityKind, subject: ch.capabilities.subject, maxTextLength: ch.capabilities.maxTextLength } : null;
+    },
+    outreachContact: async (input) => {
+      if (!directory.outreachContact) return null;
+      try {
+        return (await directory.outreachContact(input)) ?? null;
+      } catch (error) {
+        log("warn", "directory.outreachContact failed", { error: String(error) });
+        return null;
+      }
+    },
     now,
     log,
   });
@@ -880,6 +939,8 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
       replyTo: Message | null;
       headers?: Record<string, string>;
       existing?: Message;
+      /** For the first message of a conversation your team starts. Defaults to "Re: " and the ticket's subject. */
+      subject?: string | null;
       /** A new idempotency key, so the provider doesn't replay the earlier attempt's answer. */
       attemptKey?: string;
     }
@@ -899,7 +960,7 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
         from: { address: ch.address, name: options.fromName ?? null },
         to: input.to,
         cc: input.cc ?? [],
-        subject: isEmail ? replySubject(ticket.subject) : null,
+        subject: isEmail ? (input.subject !== undefined ? input.subject : replySubject(ticket.subject)) : null,
         text: input.displayText ?? input.text,
         fullText: input.text,
         html: null,
@@ -1147,11 +1208,166 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
     return message;
   }
 
-  async function loadUploads(ticketId: string, ids: string[], ch: Channel | null) {
+  // ------------------------------------------------------ writing first
+
+  /** The channel a conversation starts on when none is named: email first. */
+  function defaultStartChannel(): Channel | null {
+    const able = options.channels.filter((c) => !startBlockedReason(c));
+    return able.find((c) => c.id === options.portalChannelId) ?? able.find((c) => c.kind === "email") ?? able[0] ?? null;
+  }
+
+  /**
+   * Opens a ticket with a message from your team. The person is found or created the way inbound
+   * mail does it, the message goes out through `sendOutbound` (signature, Reply-To token, delivery
+   * tracking), and the ticket waits on the customer. When the channel doesn't take the message,
+   * the ticket stays, with the failed message to retry.
+   */
+  async function openConversation(input: StartTicketInput & { agentId: string | null; signature?: string | null; data?: Record<string, unknown> }) {
+    const text = input.text.trim();
+    if (!text) throw new SupportError("invalid", "Write a message first.");
+    const ch = input.channelId ? channel(input.channelId) : defaultStartChannel();
+    if (!ch) throw new SupportError("invalid", input.channelId ? "That channel isn't configured." : "None of your channels can start a conversation.");
+    const blocked = startBlockedReason(ch);
+    if (blocked === "needs_template") throw new SupportError("invalid", "This channel only accepts a first message from an approved template. Use email or SMS.");
+    if (blocked) throw new SupportError("invalid", "This channel can't start a conversation: the customer has to write first.");
+    const subject = ch.capabilities.subject ? (input.subject ?? "").replace(/\s+/g, " ").trim().slice(0, 200) : "";
+    if (ch.capabilities.subject && !subject) throw new SupportError("invalid", "Add a subject.");
+    const limit = ch.capabilities.maxTextLength;
+    if (limit && text.length > limit) throw new SupportError("too_large", `Messages on this channel are limited to ${limit} characters.`);
+
+    let contact: Contact;
+    let identity: Identity | undefined;
+    if ("contactId" in input.to) {
+      const known = await store.getContact(input.to.contactId);
+      if (!known) throw new SupportError("not_found", "That person isn't in the inbox.");
+      contact = known;
+      identity = contact.identities.find((i) => i.kind === ch.identityKind);
+      if (!identity) throw new SupportError("invalid", "This person has no address on this channel.");
+    } else {
+      const value = input.to.address.trim();
+      if (!value) throw new SupportError("invalid", "Choose who to write to.");
+      if (ch.kind === "email" && !EMAIL.test(value)) throw new SupportError("invalid", "Enter a valid email address.");
+      if (ch.kind === "email" && isOwnAddress(value)) throw new SupportError("invalid", "That's one of your own support addresses.");
+      identity = normalizeIdentity(ch.identityKind, value);
+      // Your teammate vouches for the address, so it may link to the customer's account.
+      contact = await resolveContact(identity, input.to.name, true);
+      if (input.to.name?.trim() && !contact.name) {
+        await store.updateContact(contact.id, { name: input.to.name.trim() });
+        contact = { ...contact, name: input.to.name.trim() };
+      }
+    }
+    let customerId = contact.customerId;
+    if (input.customerId && input.customerId !== contact.customerId) {
+      // A ticket shows in its customer's portal: it never mixes one customer's person with another's account.
+      if (contact.customerId) throw new SupportError("invalid", "This person belongs to another customer.");
+      await store.updateContact(contact.id, { customerId: input.customerId });
+      await store.linkContactTickets(contact.id, input.customerId);
+      customerId = input.customerId;
+    }
+
+    let cc: Address[] = [];
+    if (input.cc?.length && ch.kind === "email") {
+      const invalid = input.cc.find((a) => !EMAIL.test(a.address.trim()));
+      if (invalid) throw new SupportError("invalid", `${invalid.address} isn't a valid email address.`);
+      if (input.cc.length > 20) throw new SupportError("invalid", "Copy at most 20 people.");
+      cc = dedupeAddresses(
+        input.cc.map((a) => ({ address: a.address.trim(), name: a.name ?? null })).filter((a) => !isOwnAddress(a.address)),
+        [identity.value]
+      );
+    }
+    const attachments = input.agentId ? await loadUploads(null, input.attachmentIds ?? [], ch, input.agentId) : [];
+    let signature = input.signature?.trim() ?? "";
+    if (input.agentId) {
+      const agent = (await agentsById()).get(input.agentId) ?? { id: input.agentId, name: "" };
+      signature = options.signature ? options.signature(agent) : agent.name.split(" ")[0] ?? "";
+    }
+    const signed = signature && (ch.kind === "email" || !input.agentId) ? `${text}\n\n${signature}` : text;
+    // A channel too short for the signature gets the message alone.
+    const body = limit && signed.length > limit ? text : signed;
+
+    const at = now();
+    const ticket = await store.transaction(async (tx) => {
+      const created = await tx.createTicket({
+        channelId: ch.id,
+        subject: subject || null,
+        status: "waiting",
+        contactId: contact.id,
+        customerId,
+        assigneeId: input.agentId,
+        replyToken: randomToken(),
+        providerThreadId: null,
+        createdAt: at,
+      });
+      await tx.insertEvent({ ticketId: created.id, type: "created", actorId: input.agentId, data: {}, createdAt: at });
+      await tx.insertEvent({
+        ticketId: created.id,
+        type: "ticket_started",
+        actorId: input.agentId,
+        data: { to: identity.value, ...(input.data ?? {}) },
+        createdAt: at,
+      });
+      return created;
+    });
+    const message = await sendOutbound(ch, ticket, {
+      text: body,
+      displayText: text,
+      to: [{ address: identity.value, name: contact.name }],
+      cc,
+      auto: false,
+      authorId: input.agentId,
+      attachments,
+      replyTo: null,
+      subject: subject || null,
+    });
+    const failed = message.deliveryStatus === "failed";
+    const updated = await store.updateTicket(ticket.id, {
+      lastMessageAt: message.createdAt,
+      lastOutboundAt: failed ? null : message.createdAt,
+      preview: snippet(text),
+      previewKind: "outbound",
+      previewAuthorId: input.agentId,
+    });
+    if (input.agentId) await store.markRead(ticket.id, input.agentId, message.createdAt);
+    return { ticket: updated, message };
+  }
+
+  /** An agent writes to a customer first. The ticket opens as Waiting, assigned to them. */
+  async function startTicket(input: StartTicketInput & { agentId: string }) {
+    if (!input.agentId) throw new SupportError("forbidden", "Starting a conversation needs to know who is writing.");
+    return openConversation(input);
+  }
+
+  /** Your channels, with whether your team can write first on each and why not when it can't. */
+  function listChannels() {
+    const first = defaultStartChannel();
+    return options.channels.map((ch) => ({
+      id: ch.id,
+      kind: ch.kind,
+      address: ch.address,
+      identityKind: ch.identityKind,
+      capabilities: ch.capabilities,
+      startBlockedReason: startBlockedReason(ch),
+      default: ch.id === first?.id,
+    }));
+  }
+
+  /** The people of a customer, or the people matching a search: who a new conversation can go to. */
+  async function listContacts(query: { customerId?: string; search?: string; limit?: number }) {
+    if (!query.customerId && !query.search?.trim()) return [];
+    const contacts = (await store.listContacts({ customerId: query.customerId, search: query.search, limit: Math.min(query.limit ?? 20, 50) })).filter((c) => !c.blockedAt);
+    const ids = [...new Set(contacts.map((c) => c.customerId).filter((id): id is string => Boolean(id)))];
+    const customersById = new Map((await directory.getCustomers(ids).catch(() => [] as CustomerSummary[])).map((c) => [c.id, c]));
+    return contacts.map((c) => ({ id: c.id, name: c.name, identities: c.identities, customer: c.customerId ? customersById.get(c.customerId) ?? null : null }));
+  }
+
+  /** `ticketId` null: files for a conversation that doesn't exist yet, which only their uploader may send. */
+  async function loadUploads(ticketId: string | null, ids: string[], ch: Channel | null, uploadedBy?: string) {
     const files: Attachment[] = [];
     for (const id of ids) {
       const file = await store.getAttachment(id);
-      if (!file || file.ticketId !== ticketId || file.messageId) throw new SupportError("invalid", "Attachment not found.");
+      if (!file || file.ticketId !== ticketId || file.messageId || (ticketId === null && file.uploadedBy !== uploadedBy)) {
+        throw new SupportError("invalid", "Attachment not found.");
+      }
       files.push(file);
     }
     if (files.length && ch && !ch.capabilities.attachments) {
@@ -1311,16 +1527,17 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
     return updated;
   }
 
+  /** `ticketId` null: a file for a conversation that `startTicket` is about to open. */
   async function uploadAttachment(input: {
-    ticketId: string;
+    ticketId: string | null;
     filename: string;
     contentType: string;
     bytes: Uint8Array;
     uploadedBy: string;
   }) {
-    await getTicketOrThrow(input.ticketId);
+    if (input.ticketId) await getTicketOrThrow(input.ticketId);
     if (input.bytes.byteLength > maxAttachmentBytes) throw new SupportError("too_large", "This file is too large.");
-    const key = `${input.ticketId}/${crypto.randomUUID()}/${safeFilename(input.filename)}`;
+    const key = `${input.ticketId ?? "new"}/${crypto.randomUUID()}/${safeFilename(input.filename)}`;
     await storage.put(key, input.bytes, input.contentType || "application/octet-stream");
     const row = await store.insertAttachment({
       ticketId: input.ticketId,
@@ -1515,6 +1732,8 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
       const [agents, reads] = await Promise.all([agentsById(), store.getReadTimes(items.map((t) => t.id), input.readerId)]);
       return {
         total,
+        /** The Ask box is on: AI is configured and your team switched self-serve on. */
+        ask: await askEnabled(),
         items: items.map((t): PortalTicket => {
           const readAt = reads.get(t.id);
           return {
@@ -1554,15 +1773,88 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
     },
 
     /** A request written in your app. Replies go out by email on `portalChannelId`. */
-    async create(input: {
-      customerId: string;
-      userId: string;
-      email: string;
-      name: string | null;
-      locale?: string | null;
-      subject: string;
-      text: string;
-    }) {
+    create: (input: PortalRequest) => createPortalTicket(input, null),
+
+    /**
+     * The Ask box: an instant answer for a signed-in customer, from your knowledge, your approved
+     * answers and their own account. `customerId` and `userId` come from your session, never from
+     * the browser: they decide whose account is read. Answers "handoff" when it can't answer, or
+     * when the customer asks for a person.
+     */
+    async ask(input: { customerId: string; userId: string; question: string; sessionId?: string | null }): Promise<AskResult> {
+      if (!input.customerId || !input.userId) throw new SupportError("forbidden", "Sign in to ask a question.");
+      if (!ai || !(await askEnabled())) throw new SupportError("invalid", "Instant answers aren't available right now.");
+      return ai.selfServe.ask(input);
+    },
+
+    /** The customer's thumbs-up or thumbs-down on an answer. */
+    async rateAnswer(input: { customerId: string; userId: string; sessionId: string; helpful: boolean }) {
+      if (!input.customerId || !input.userId) throw new SupportError("forbidden", "Sign in first.");
+      if (!ai) throw new SupportError("invalid", "Instant answers aren't available right now.");
+      await ai.selfServe.rate(input);
+    },
+
+    /**
+     * Hands an Ask conversation to your team as a ticket: the customer's question (or `text`, when
+     * they reworded it) as the message, and a note for the agent with what was asked, what AI
+     * answered and the sources it used.
+     */
+    async escalate(input: { customerId: string; userId: string; email: string; name: string | null; locale?: string | null; sessionId: string; text?: string }) {
+      if (!input.customerId || !input.userId) throw new SupportError("forbidden", "Sign in first.");
+      if (!ai) throw new SupportError("invalid", "Instant answers aren't available right now.");
+      const context = await ai.selfServe.handOff(input);
+      const created = await createPortalTicket({ ...input, subject: context.subject, text: input.text?.trim() || context.text }, context.note);
+      try {
+        await ai.selfServe.handedOff({ sessionId: input.sessionId, ticketId: created.id });
+      } catch (error) {
+        log("warn", "ai: recording a hand-off failed", { ticketId: created.id, error: String(error) });
+      }
+      return created;
+    },
+
+    async reply(input: { ticketId: string; customerId: string; userId: string; email: string; name: string | null; onlyOwn?: boolean; text: string }) {
+      const ticket = await portalTicket({ ...input, userId: input.onlyOwn ? input.userId : null });
+      const text = input.text.trim();
+      if (!text) throw new SupportError("invalid", "Write a message first.");
+      const at = now();
+      const message = (await store.insertMessage(
+        portalMessage(ticket.id, ticket.channelId, input.userId, input.email, input.name, ticket.subject, text, at)
+      ))!;
+      const reopened = ticket.status === "solved";
+      const updated = await store.updateTicket(ticket.id, {
+        status: "open",
+        waitingSince: ticket.waitingSince ?? at,
+        lastInboundAt: at,
+        lastMessageAt: at,
+        solvedAt: null,
+        preview: snippet(text),
+        previewKind: "inbound",
+        previewAuthorId: null,
+      });
+      if (reopened) await store.insertEvent({ ticketId: ticket.id, type: "reopened", actorId: input.userId, data: {}, createdAt: at });
+      await store.markRead(ticket.id, input.userId, at);
+      const contact = (await store.getContact(ticket.contactId))!;
+      await safeNotify({ type: "ticket.customer_replied", ticket: updated, message: { ...message, attachments: [] }, contact });
+      await aiMessageReceived(updated, { ...message, attachments: [] });
+      return { id: message.id };
+    },
+  };
+
+  type PortalRequest = { customerId: string; userId: string; email: string; name: string | null; locale?: string | null; subject: string; text: string };
+
+  async function askEnabled() {
+    if (!ai) return false;
+    try {
+      return await ai.selfServe.enabled();
+    } catch (error) {
+      log("warn", "ai: self-serve isn't available (is 0007_proactive applied?)", { error: String(error) });
+      return false;
+    }
+  }
+
+  /** `note`: what a hand-off from the Ask box leaves for the agent, written before anyone is told about the ticket. */
+  async function createPortalTicket(input: PortalRequest, note: string | null) {
+    {
       const channelId = options.portalChannelId;
       const ch = channelId ? channel(channelId) : null;
       if (!ch) {
@@ -1609,41 +1901,38 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
           previewKind: "inbound",
         });
         await tx.markRead(ticket.id, input.userId, at);
+        if (note) {
+          await tx.insertMessage({
+            ticketId: ticket.id,
+            kind: "note",
+            channelId: null,
+            authorId: null,
+            from: null,
+            to: [],
+            cc: [],
+            subject: null,
+            text: note,
+            fullText: null,
+            html: null,
+            rfcMessageId: null,
+            inReplyTo: null,
+            references: [],
+            providerMessageId: null,
+            deliveryStatus: null,
+            deliveryError: null,
+            auto: false,
+            source: "portal",
+            createdAt: new Date(at.getTime() + 1),
+          });
+        }
         return { ticket: updated, message };
       });
       const fresh = (await store.getContact(contact.id))!;
       await safeNotify({ type: "ticket.created", ticket: result.ticket, message: { ...result.message, attachments: [] }, contact: fresh });
       await aiMessageReceived(result.ticket, { ...result.message, attachments: [] });
       return { id: result.ticket.id };
-    },
-
-    async reply(input: { ticketId: string; customerId: string; userId: string; email: string; name: string | null; onlyOwn?: boolean; text: string }) {
-      const ticket = await portalTicket({ ...input, userId: input.onlyOwn ? input.userId : null });
-      const text = input.text.trim();
-      if (!text) throw new SupportError("invalid", "Write a message first.");
-      const at = now();
-      const message = (await store.insertMessage(
-        portalMessage(ticket.id, ticket.channelId, input.userId, input.email, input.name, ticket.subject, text, at)
-      ))!;
-      const reopened = ticket.status === "solved";
-      const updated = await store.updateTicket(ticket.id, {
-        status: "open",
-        waitingSince: ticket.waitingSince ?? at,
-        lastInboundAt: at,
-        lastMessageAt: at,
-        solvedAt: null,
-        preview: snippet(text),
-        previewKind: "inbound",
-        previewAuthorId: null,
-      });
-      if (reopened) await store.insertEvent({ ticketId: ticket.id, type: "reopened", actorId: input.userId, data: {}, createdAt: at });
-      await store.markRead(ticket.id, input.userId, at);
-      const contact = (await store.getContact(ticket.contactId))!;
-      await safeNotify({ type: "ticket.customer_replied", ticket: updated, message: { ...message, attachments: [] }, contact });
-      await aiMessageReceived(updated, { ...message, attachments: [] });
-      return { id: message.id };
-    },
-  };
+    }
+  }
 
   function portalMessage(
     ticketId: string,
@@ -1707,6 +1996,19 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
     return result.response ?? new Response(null, { status: 200 });
   }
 
+  /**
+   * Your product noticed something a customer should hear about before they ask: payouts failing,
+   * webhooks erroring, a document expiring. With AI, it becomes a drafted message in the inbox's
+   * Outreach queue, for an agent to send, edit or dismiss. A signal that isn't acted on says why.
+   */
+  async function signal(input: SignalInput): Promise<SignalResult> {
+    if (!ai) {
+      log("warn", "signal ignored: configure `ai` to turn signals into outreach", { kind: input.kind });
+      return { status: "suppressed", reason: "unavailable" };
+    }
+    return ai.signal(input);
+  }
+
   /** Run every few minutes: polls channels, renews subscriptions, fails sends that never finished. */
   async function runScheduled() {
     const summary: Record<string, string> = {};
@@ -1745,6 +2047,10 @@ export function createSupport<Ai extends AnyAiPlugin | undefined = undefined>(op
     handleWebhook,
     runScheduled,
     reply,
+    startTicket,
+    listChannels,
+    listContacts,
+    signal,
     retry,
     addNote,
     assign,

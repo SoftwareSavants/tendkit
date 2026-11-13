@@ -5,21 +5,29 @@ import type {
   AiInsights,
   AiSettings,
   ApprovedAnswer,
+  AskResult,
   AutopilotExample,
   AutopilotOverview,
   AutopilotRecord,
   AutopilotTopic,
+  BroadcastPreview,
   Customer,
   FileInfo,
   Gap,
   GuidanceSuggestion,
+  Outreach,
+  OutreachKind,
   PortalMessage,
   PortalTicket,
   ProposedAction,
+  Recipient,
   DaySeries,
   PeriodTotals,
   Spike,
+  StartChannel,
+  StartTicketInput,
   Suggestion,
+  SuggestionSource,
   SupportClient,
   SupportPortalClient,
   TicketCounts,
@@ -30,6 +38,7 @@ import type {
   TimelineEvent,
   TimelineMessage,
 } from "@/registry/support-ui/client";
+import { INCIDENT_KIND, handoffNote, personalise, type AskTurn } from "@/registry/support/proactive";
 
 /*
  * The live demo's backend: the same contract your API gives the screens, kept in memory in the
@@ -47,6 +56,11 @@ import type {
  * And Insights: months of history don't fit in a browser tab, so the dashboard's totals are
  * generated here (the same every visit), while the spike is real: six customers wrote about
  * payouts in the last hour, and those tickets are in the inbox.
+ * And writing first: a new ticket, a sent proposal and an incident message all open a ticket
+ * through one path, and it shows in the customer's portal. The Outreach queue starts with one
+ * proposal waiting and one about to send on its own; `demoSignal()` reports another, as your
+ * product would. The portal's Ask box answers four subjects from Northwind Coffee's account and
+ * the help center, and hands everything else to a person.
  */
 
 export const VIEWER: Agent = { id: "agent_you", name: "Alex Chen" };
@@ -157,6 +171,13 @@ type State = {
   guidanceSuggestions: GuidanceSuggestion[];
   gaps: Gap[];
   spikes: Spike[];
+  /** The Outreach queue, with what was sent or dismissed. */
+  outreach: Outreach[];
+  outreachKinds: OutreachKind[];
+  /** The customers written to about each spike. */
+  broadcasts: Map<string, Set<string>>;
+  /** The portal's Ask conversations, by session id. */
+  asks: Map<string, { turns: AskTurn[]; helpful: boolean | null; ticketId: string | null }>;
   autopilot: Omit<AutopilotOverview, "topics"> & { topics: AutopilotTopic[]; examples: Record<string, AutopilotExample[]> };
   messages: Map<string, TimelineMessage[]>;
   events: Map<string, TimelineEvent[]>;
@@ -166,6 +187,94 @@ type State = {
 };
 
 const minutes = (n: number) => new Date(Date.now() - n * 60_000);
+
+/** A track record, as recorded outcomes add up to in a real install. */
+const record = (r: Omit<AutopilotRecord, "recent"> & { recent: [good: number, drafts: number] }): AutopilotRecord => ({
+  ...r,
+  recent: { good: r.recent[0], drafts: r.recent[1], rate: r.recent[0] / r.recent[1] },
+});
+
+/** What outreach kinds need before they send on their own: the engine's defaults. */
+const OUTREACH = { minDrafts: 10, minRate: 0.9, windowDays: 90, holdMinutes: 10 };
+
+const article = (slug: string, title: string): SuggestionSource => ({ type: "knowledge", id: `help-center/${slug}`, title, url: `https://help.acme.test/${slug}` });
+const ARTICLES = {
+  payouts: article("payout-schedule", "Payout schedule"),
+  bank: article("bank-account", "Change your bank account"),
+  refunds: article("refunds", "Refund an order"),
+  invoices: article("invoice-details", "Invoices and tax details"),
+  team: article("team-roles", "Invite your team"),
+  documents: article("verification-documents", "Verification documents"),
+  cards: article("payment-methods", "Update your payment method"),
+  start: article("getting-started", "Getting started"),
+};
+
+/** A signal as your product would report it, with the message the scripted AI writes for it. */
+type DemoSignal = Pick<Outreach, "kind" | "title" | "facts" | "sources"> & { account: string; to: string; subject: string; text: string };
+const SIGNALS: DemoSignal[] = [
+  {
+    kind: "card_expiring",
+    account: "acc_sol",
+    to: "lucia@clinicasol.test",
+    title: "The card on file expires this month",
+    facts: [
+      { label: "Card", value: "Visa ending 4242" },
+      { label: "Next invoice", value: "$49.00 on the 1st" },
+    ],
+    subject: "Your card on file expires this month",
+    text: "Hi Lucia,\n\nThe Visa ending 4242 on Clínica Sol's account expires this month, and your next invoice of $49.00 is due on the 1st.\n\nYou can add a new card from Billing, then Payment method. It takes effect straight away, so the next invoice is charged to it.",
+    sources: [
+      { type: "fact", id: "fact:1", title: "Card" },
+      { type: "fact", id: "fact:2", title: "Next invoice" },
+      ARTICLES.cards,
+    ],
+  },
+  {
+    kind: "payouts_failing",
+    account: "acc_rossi",
+    to: "sofia@rossi.studio",
+    title: "Payouts have failed 2 times since Tuesday",
+    facts: [
+      { label: "Failed payouts", value: "2 since Tuesday" },
+      { label: "Bank's reason", value: "Account details don't match" },
+      { label: "Amount held", value: "$625.00" },
+    ],
+    subject: "Your payouts are failing",
+    text: "Hi Sofia,\n\nYour last 2 payouts to Rossi Studio's bank account have failed since Tuesday. The bank's reason both times was that the account details don't match, so $625.00 is waiting on our side.\n\nYou can check the account name and number from Settings, then Payouts. Once they're corrected, the amount held goes out with the next payout.",
+    sources: [
+      { type: "fact", id: "fact:1", title: "Failed payouts" },
+      { type: "fact", id: "fact:2", title: "Bank's reason" },
+      ARTICLES.bank,
+    ],
+  },
+  {
+    kind: "document_expiring",
+    account: "acc_harbor",
+    to: "mateo@harborbooks.test",
+    title: "Proof of address expires in 7 days",
+    facts: [
+      { label: "Document", value: "Proof of address" },
+      { label: "Expires", value: "In 7 days" },
+    ],
+    subject: "Your proof of address expires in 7 days",
+    text: "Hi Mateo,\n\nThe proof of address on file for Harbor Books expires in 7 days. After that date, payouts pause until a current one is uploaded.\n\nYou can upload a new document from Settings, then Verification. We review it within one business day.",
+    sources: [
+      { type: "fact", id: "fact:1", title: "Document" },
+      { type: "fact", id: "fact:2", title: "Expires" },
+      ARTICLES.documents,
+    ],
+  },
+];
+
+let report: (() => string | null) | null = null;
+/**
+ * Reports the next scripted signal, as `support.ai.signal()` would from your product: a proposal
+ * appears in the Outreach queue and its message is written a moment later. Returns the proposal's
+ * id, or null once every scripted signal has been reported.
+ */
+export function demoSignal(): string | null {
+  return report?.() ?? null;
+}
 
 /** An action proposed with a scripted suggestion. */
 function proposal(name: string, input: Record<string, unknown>, reason: string): ProposedAction {
@@ -209,6 +318,7 @@ function seed(): State {
         { id: "developer-docs", articles: 118, syncedAt: minutes(190) },
       ],
       actions: DEMO_ACTIONS.map(({ name, title, description, approval }) => ({ name, title, description, approval, enabled: true })),
+      selfServe: true,
     },
     answers: [
       {
@@ -233,6 +343,10 @@ function seed(): State {
     guidanceSuggestions: [],
     gaps: [],
     spikes: [],
+    outreach: [],
+    outreachKinds: [],
+    broadcasts: new Map(),
+    asks: new Map(),
     autopilot: { stopped: false, stoppedBy: null, stoppedAt: null, minDrafts: 30, minRate: 0.9, floor: { minDrafts: 30, minRate: 0.9 }, windowDays: 30, holdMinutes: 10, topics: [], examples: {} },
     seq: 1040,
     messages: new Map(),
@@ -558,6 +672,7 @@ function seed(): State {
       usual: 1.4,
       acknowledgedAt: null,
       acknowledgedBy: null,
+      messaged: 0,
       latest: [...payoutTickets].reverse().slice(0, 5).map(({ id, number, subject }) => ({ id, number, subject })),
     },
     {
@@ -571,6 +686,7 @@ function seed(): State {
       usual: 2.1,
       acknowledgedAt: minutes(9 * 24 * 60 + 41),
       acknowledgedBy: AGENTS[1]!,
+      messaged: 0,
       latest: [],
     },
   ];
@@ -604,11 +720,7 @@ function seed(): State {
     createdAt: sentReply.createdAt,
   });
 
-  // Each topic's last 30 days, as recorded outcomes add up to in a real install.
-  const record = (r: Omit<AutopilotRecord, "recent"> & { recent: [good: number, drafts: number] }): AutopilotRecord => ({
-    ...r,
-    recent: { good: r.recent[0], drafts: r.recent[1], rate: r.recent[0] / r.recent[1] },
-  });
+  // Each topic's last 30 days.
   const never = { mode: null, enabledBy: null, enabledAt: null, pausedAt: null, pauseReason: null };
   state.autopilot.topics = [
     {
@@ -713,6 +825,82 @@ function seed(): State {
       { suggestionId: "ex_e2", ticket: exporting, outcome: "used", byAutopilot: false, at: minutes(5 * 24 * 60), sent: null, draft: "Hi,\n\nYou can export any table from the menu at its top right, as CSV or Excel." },
     ],
   };
+
+  // Outreach: two signals your product reported. One waits for an agent; the other is of a kind
+  // the team lets send on its own, and waits out its delay.
+  const person = (address: string) => {
+    const contact = state.tickets.find((t) => t.contact.identities[0]?.value === address)!.contact;
+    const account = ACCOUNTS.find((a) => a.id === contact.customerId)!;
+    return { customer: { id: account.id, name: account.name }, contact: { id: contact.id, name: contact.name, address } };
+  };
+  const waiting = { language: "en", autoBlock: null, lastError: null, ticketId: null, auto: false, decidedBy: null, drafted: true, decidedAt: null };
+  state.outreach = [
+    {
+      id: "out_payouts",
+      kind: "payouts_failing",
+      title: "Payouts have failed 3 times since Monday",
+      facts: [
+        { label: "Failed payouts", value: "3 since Monday" },
+        { label: "Bank's reason", value: "Account closed" },
+        { label: "Amount held", value: "$2,480.00" },
+      ],
+      ...person("tom@atlasfreight.test"),
+      subject: "Your payouts are failing",
+      text: "Hi Tom,\n\nYour last 3 payouts to Atlas Freight's bank account have failed since Monday. The bank's reason each time was that the account is closed, so $2,480.00 is waiting on our side.\n\nYou can add a new bank account from Settings, then Payouts. Once it's verified, the amount held goes out with the next payout.\n\nIf the account should still be open, reply here and we'll check with the bank.",
+      sources: [
+        { type: "fact", id: "fact:1", title: "Failed payouts" },
+        { type: "fact", id: "fact:2", title: "Bank's reason" },
+        ARTICLES.bank,
+      ],
+      ...waiting,
+      status: "pending",
+      sendAt: null,
+      createdAt: minutes(22),
+    },
+    {
+      id: "out_document",
+      kind: "document_expiring",
+      title: "Business licence expires in 14 days",
+      facts: [
+        { label: "Document", value: "Business licence" },
+        { label: "Expires", value: "In 14 days" },
+      ],
+      ...person("sara@nordvik.io"),
+      subject: "Your business licence expires in 14 days",
+      text: "Hi Sara,\n\nThe business licence on file for Nordvik expires in 14 days. After that date, payouts pause until a current one is uploaded.\n\nYou can upload the renewed licence from Settings, then Verification. We review it within one business day.",
+      sources: [
+        { type: "fact", id: "fact:1", title: "Document" },
+        { type: "fact", id: "fact:2", title: "Expires" },
+        ARTICLES.documents,
+      ],
+      ...waiting,
+      status: "held",
+      sendAt: new Date(Date.now() + OUTREACH.holdMinutes * 60_000),
+      createdAt: minutes(0),
+    },
+  ];
+  state.outreachKinds = [
+    {
+      kind: "document_expiring",
+      example: "Business licence expires in 14 days",
+      stage: "on",
+      enabledBy: AGENTS[1]!,
+      enabledAt: minutes(12 * 24 * 60),
+      pausedAt: null,
+      ready: true,
+      record: record({ drafts: 24, usedAsIs: 21, lightlyEdited: 2, heavilyEdited: 1, discarded: 0, cameBackUnhappy: 0, flagged: 0, cannotAnswer: 0, sentByAutopilot: 9, reopened: 0, recent: [10, 10], languages: [{ language: "en", drafts: 22, good: 21 }, { language: "es", drafts: 2, good: 2 }] }),
+    },
+    {
+      kind: "payouts_failing",
+      example: "Payouts have failed 3 times since Monday",
+      stage: "eligible",
+      enabledBy: null,
+      enabledAt: null,
+      pausedAt: null,
+      ready: true,
+      record: record({ drafts: 14, usedAsIs: 10, lightlyEdited: 3, heavilyEdited: 1, discarded: 0, cameBackUnhappy: 0, flagged: 0, cannotAnswer: 0, sentByAutopilot: 0, reopened: 1, recent: [9, 10], languages: [{ language: "en", drafts: 14, good: 13 }] }),
+    },
+  ];
   return state;
 }
 
@@ -914,7 +1102,278 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
     }, 6000);
   };
 
+  // Writing first. Everyone the inbox knows, one entry per person: Lucia's phone and email are one recipient.
+  const people = (): Recipient[] => {
+    const known = new Map<string, Recipient>();
+    for (const t of s.tickets) {
+      if (t.status === "spam") continue;
+      const c = t.contact;
+      const key = c.customerId && c.name ? `${c.customerId}:${c.name}` : (c.identities[0]?.value ?? c.id);
+      const entry = known.get(key);
+      if (!entry) known.set(key, { id: c.id, name: c.name, identities: [...c.identities], customer: customer(c.customerId) });
+      else for (const identity of c.identities) if (!entry.identities.some((i) => i.value === identity.value)) entry.identities.push(identity);
+    }
+    return [...known.values()];
+  };
+  const person = (contactId: string) => {
+    const own = s.tickets.find((t) => t.contact.id === contactId)?.contact;
+    return own ? (people().find((p) => p.identities.some((i) => own.identities.some((o) => o.value === i.value))) ?? null) : null;
+  };
+
+  /**
+   * Opens a ticket with a message from the team, as the service's `openConversation` does: New
+   * ticket, a sent proposal and an incident message all come through here. `by` is null for a
+   * message that went out on its own.
+   */
+  const openConversation = (input: StartTicketInput, by: Agent | null, data: Record<string, unknown> = {}) => {
+    const text = input.text.trim();
+    if (!text) throw new Error("Write a message first.");
+    const kind = (input.channelId ?? "email") as ChannelKind;
+    const ch = CHANNELS[kind] as (typeof CHANNELS)[ChannelKind] | undefined;
+    if (!ch) throw new Error("That channel isn't configured.");
+    if (kind === "whatsapp") throw new Error("This channel only accepts a first message from an approved template. Use email or SMS.");
+    const subject = kind === "email" ? (input.subject ?? "").replace(/\s+/g, " ").trim().slice(0, 200) : "";
+    if (kind === "email" && !subject) throw new Error("Add a subject.");
+    const limit = ch.capabilities.maxTextLength;
+    if (limit && text.length > limit) throw new Error(`Messages on this channel are limited to ${limit} characters.`);
+
+    const identityKind = kind === "email" ? "email" : "phone";
+    let known: Recipient | null;
+    let value: string;
+    if ("contactId" in input.to) {
+      known = person(input.to.contactId);
+      if (!known) throw new Error("That person isn't in the inbox.");
+      const identity = known.identities.find((i) => i.kind === identityKind);
+      if (!identity) throw new Error("This person has no address on this channel.");
+      value = identity.value;
+    } else {
+      value = kind === "email" ? input.to.address.trim().toLowerCase() : input.to.address.trim();
+      if (!value) throw new Error("Choose who to write to.");
+      if (kind === "email" && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) throw new Error("Enter a valid email address.");
+      if (kind === "email" && value.endsWith("@acme.com")) throw new Error("That's one of your own support addresses.");
+      known = people().find((p) => p.identities.some((i) => i.value.toLowerCase() === value.toLowerCase())) ?? null;
+    }
+    const name = known?.name ?? ("address" in input.to ? input.to.name?.trim() || null : null);
+    const linked = known?.customer?.id ?? null;
+    // A ticket shows in its customer's portal: it never mixes one customer's person with another's account.
+    if (input.customerId && linked && input.customerId !== linked) throw new Error("This person belongs to another customer.");
+    const customerId = linked ?? input.customerId ?? null;
+    if (customerId && !linked) {
+      for (const t of s.tickets) {
+        if (t.contact.identities.some((i) => i.value === value)) Object.assign(t, { customerId, contact: { ...t.contact, customerId } });
+      }
+    }
+
+    const at = new Date();
+    const id = nextId("tkt");
+    const t: Ticket = {
+      id,
+      number: ++s.seq,
+      subject: subject || null,
+      status: "waiting",
+      customerId,
+      assigneeId: by?.id ?? null,
+      waitingSince: null,
+      createdAt: at,
+      channel: kind,
+      contact: { id: nextId("con"), name, identities: [{ kind: identityKind, value }], customerId, locale: "en" },
+      lastMessageAt: at,
+      answered: false,
+    };
+    s.tickets.push(t);
+    s.messages.set(id, [
+      message({
+        kind: "outbound",
+        text,
+        createdAt: at,
+        authorId: by?.id ?? null,
+        to: [{ address: value, name }],
+        cc: kind === "email" ? (input.cc ?? []).filter((x) => !x.address.endsWith("@acme.com") && x.address.toLowerCase() !== value) : [],
+        attachments: (input.attachmentIds ?? []).flatMap((fileId) => s.files.get(fileId)?.info ?? []),
+      }),
+    ]);
+    s.events.set(id, [{ id: nextId("evt"), type: "ticket_started", actorId: by?.id ?? null, data: { to: value, ...data }, createdAt: at }]);
+    if (by) s.reads.set(id, at);
+    return t;
+  };
+
+  const keep = (file: File) => {
+    const info: FileInfo = { id: nextId("file"), filename: file.name, contentType: file.type || "application/octet-stream", size: file.size };
+    s.files.set(info.id, { info, url: URL.createObjectURL(file) });
+    return info;
+  };
+
+  // Outreach. A kind earns sending on its own the way a topic earns Autopilot.
+  const kindOf = (kind: string) => s.outreachKinds.find((k) => k.kind === kind);
+  const kindMeets = (k: OutreachKind) => k.record.recent.drafts >= OUTREACH.minDrafts && k.record.recent.rate >= OUTREACH.minRate;
+  const deliverOutreach = (o: Outreach, by: Agent | null, subject: string, text: string) => {
+    if (!o.contact) throw new Error("Nobody at this customer has an address to write to.");
+    const t = openConversation({ to: { contactId: o.contact.id }, customerId: o.customer.id, subject: subject || o.title, text }, by, { outreachId: o.id, kind: o.kind, ...(by ? {} : { auto: true }) });
+    const asDrafted = text.trim() === (o.text ?? "").trim();
+    Object.assign(o, { status: "sent", subject: subject || o.title, text: text.trim(), sendAt: null, autoBlock: null, ticketId: t.id, auto: !by, decidedBy: by, decidedAt: new Date() });
+    const k = kindOf(o.kind);
+    if (k) {
+      const { record: r } = k;
+      const drafts = Math.min(OUTREACH.minDrafts, r.recent.drafts + 1);
+      const good = Math.min(drafts, r.recent.good + 1);
+      k.record = { ...r, drafts: r.drafts + 1, usedAsIs: r.usedAsIs + (asDrafted ? 1 : 0), lightlyEdited: r.lightlyEdited + (asDrafted ? 0 : 1), sentByAutopilot: r.sentByAutopilot + (by ? 0 : 1), recent: { drafts, good, rate: good / drafts } };
+      k.ready = kindMeets(k);
+      if (k.stage === "collecting" || k.stage === "eligible") k.stage = k.ready ? "eligible" : "collecting";
+    }
+    return t;
+  };
+  /** Sends the held messages whose time has come, as the scheduled run does. */
+  const sendDueOutreach = () => {
+    for (const o of s.outreach) {
+      if (o.status !== "held" || !o.sendAt || +new Date(o.sendAt) > Date.now()) continue;
+      if (pilot.stopped || kindOf(o.kind)?.stage !== "on") Object.assign(o, { status: "pending", sendAt: null, autoBlock: pilot.stopped ? "stopped" : "held_back" });
+      else deliverOutreach(o, null, o.subject ?? o.title, o.text ?? "");
+      onChange();
+    }
+  };
+  const sendLater = (o: Outreach) => {
+    if (o.status === "held" && o.sendAt && typeof window !== "undefined") setTimeout(sendDueOutreach, Math.max(0, +new Date(o.sendAt) - Date.now()) + 50);
+  };
+  s.outreach.forEach(sendLater);
+
+  // A signal from your product: the proposal appears at once, its message a moment later.
+  report = () => {
+    const next = SIGNALS.find((signal) => !s.outreach.some((o) => o.kind === signal.kind && o.customer.id === signal.account));
+    const to = next && people().find((p) => p.identities.some((i) => i.value === next.to));
+    if (!next || !to) return null;
+    const o: Outreach = {
+      id: nextId("out"),
+      kind: next.kind,
+      title: next.title,
+      facts: next.facts,
+      customer: customer(next.account)!,
+      contact: { id: to.id, name: to.name, address: next.to },
+      subject: null,
+      text: null,
+      sources: [],
+      language: "en",
+      status: "drafting",
+      sendAt: null,
+      autoBlock: null,
+      lastError: null,
+      ticketId: null,
+      auto: false,
+      decidedBy: null,
+      drafted: false,
+      createdAt: new Date(),
+      decidedAt: null,
+    };
+    s.outreach.unshift(o);
+    const k = kindOf(next.kind);
+    if (k) k.example = next.title;
+    else {
+      s.outreachKinds.push({
+        kind: next.kind,
+        example: next.title,
+        stage: "collecting",
+        enabledBy: null,
+        enabledAt: null,
+        pausedAt: null,
+        ready: false,
+        record: record({ drafts: 3, usedAsIs: 2, lightlyEdited: 1, heavilyEdited: 0, discarded: 0, cameBackUnhappy: 0, flagged: 0, cannotAnswer: 0, sentByAutopilot: 0, reopened: 0, recent: [3, 3], languages: [{ language: "en", drafts: 3, good: 3 }] }),
+      });
+    }
+    onChange();
+    setTimeout(() => {
+      if (o.status !== "drafting") return;
+      const alone = !pilot.stopped && kindOf(o.kind)?.stage === "on";
+      Object.assign(o, { subject: next.subject, text: next.text, sources: next.sources, drafted: true, status: alone ? "held" : "pending", sendAt: alone ? new Date(Date.now() + OUTREACH.holdMinutes * 60_000) : null });
+      sendLater(o);
+      onChange();
+    }, 1500);
+    return o.id;
+  };
+
+  // An incident message goes to one person at each customer who wrote in about the spike's topic.
+  const spikeOf = (id: string) => {
+    const spike = s.spikes.find((x) => x.id === id);
+    if (!spike) throw new Error("That spike doesn't exist.");
+    return spike;
+  };
+  const affected = (spike: Spike): Pick<BroadcastPreview, "recipients" | "skipped"> => {
+    const from = +new Date(spike.startedAt);
+    const to = spike.endedAt ? +new Date(spike.endedAt) : Infinity;
+    const live = s.tickets
+      .filter((t) => t.status !== "spam" && s.insights.get(t.id)?.topic === spike.topic && +new Date(t.createdAt) >= from && +new Date(t.createdAt) < to)
+      .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt));
+    const messaged = s.broadcasts.get(spike.id);
+    const recipients: BroadcastPreview["recipients"] = [];
+    const skipped = { unlinked: 0, alreadyMessaged: 0, unreachable: 0 };
+    const seen = new Set<string>();
+    for (const t of live) {
+      const key = t.customerId ?? `contact:${t.contact.identities[0]?.value}`;
+      if (seen.has(key)) continue;
+      const address = t.contact.identities.find((i) => i.kind === "email")?.value;
+      // The newest ticket of a customer may be from someone we can't write to: an older one may not be.
+      if (t.customerId && !address) continue;
+      seen.add(key);
+      // A sender nobody linked to a customer is not written to.
+      if (!t.customerId) skipped.unlinked++;
+      else if (messaged?.has(t.customerId)) skipped.alreadyMessaged++;
+      else recipients.push({ customer: customer(t.customerId) ?? { id: t.customerId, name: t.customerId }, contact: { id: t.contact.id, name: t.contact.name, address: address! }, ticket: { id: t.id, number: t.number, subject: t.subject } });
+    }
+    skipped.unreachable = new Set(live.filter((t) => t.customerId && !seen.has(t.customerId)).map((t) => t.customerId)).size;
+    return { recipients, skipped };
+  };
+
+  /** One line of intent as a sentence to the customer: "tell them payouts are late" reads "Payouts are late." */
+  const toCustomer = (intent: string) => {
+    const line = intent
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/^(please )?(tell|let|inform|warn) (them|him|her|the customers?|everyone)( know)?( that)?\s*/i, "")
+      .replace(/\bthey are\b/gi, "you are")
+      .replace(/\bthey\b/gi, "you")
+      .replace(/\btheir\b/gi, "your")
+      .replace(/\bthem\b/gi, "you");
+    return sentences(line)
+      .map((part) => part[0]!.toUpperCase() + part.slice(1).replace(/([^.!?])$/, "$1."))
+      .join(" ");
+  };
+
   const agentClient: SupportClient = {
+    async startTicket(input) {
+      const t = openConversation(input, VIEWER);
+      onChange();
+      return delay({ ticketId: t.id });
+    },
+
+    async listChannels() {
+      return delay(
+        (Object.keys(CHANNELS) as ChannelKind[]).map(
+          (id): StartChannel => ({
+            id,
+            kind: CHANNELS[id].kind,
+            address: CHANNELS[id].address,
+            startBlockedReason: id === "whatsapp" ? "needs_template" : null,
+            default: id === "email",
+            capabilities: { ...CHANNELS[id].capabilities, subject: id === "email" },
+          })
+        )
+      );
+    },
+
+    async listContacts({ customerId, search }) {
+      const term = search?.trim().toLowerCase();
+      if (!customerId && !term) return delay([]);
+      return delay(
+        people().filter(
+          (p) =>
+            (!customerId || p.customer?.id === customerId) &&
+            (!term || [p.name, p.customer?.name, ...p.identities.map((i) => i.value)].some((v) => v?.toLowerCase().includes(term)))
+        )
+      );
+    },
+
+    async uploadForNewTicket({ file }) {
+      return delay(keep(file));
+    },
+
     async listTickets(q) {
       const term = q.search?.toLowerCase();
       let items = s.tickets.filter((t) => (q.status ? t.status === q.status : t.status !== "spam"));
@@ -1061,9 +1520,7 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
     },
 
     async upload({ file }) {
-      const info: FileInfo = { id: nextId("file"), filename: file.name, contentType: file.type || "application/octet-stream", size: file.size };
-      s.files.set(info.id, { info, url: URL.createObjectURL(file) });
-      return delay(info);
+      return delay(keep(file));
     },
 
     async attachmentUrl({ id }) {
@@ -1140,7 +1597,22 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
     ai: {
       async insights({ from, to }) {
         const days = Math.max(1, Math.ceil((+to - +from) / DAY_MS));
-        return delay({ ...sample.ai(days), gaps: s.gaps.map(({ id, theme, count, lastSeenAt }) => ({ id, theme, count, lastSeenAt })).sort((a, b) => b.count - a.count), spikes: s.spikes.filter((spike) => +new Date(spike.detectedAt) >= +from) });
+        // The visitor's own questions in the portal count on top of the sample history.
+        const asked = [...s.asks.values()];
+        const history = sample.ai(days);
+        const answered = asked.filter((a) => a.turns.some((turn) => turn.kind === "answer"));
+        const selfServe = {
+          previous: history.selfServe!.previous,
+          current: {
+            conversations: history.selfServe!.current.conversations + asked.length,
+            answered: history.selfServe!.current.answered + answered.length,
+            deflected: history.selfServe!.current.deflected + answered.filter((a) => a.helpful && !a.ticketId).length,
+            escalated: history.selfServe!.current.escalated + asked.filter((a) => a.ticketId).length,
+            helpful: history.selfServe!.current.helpful + asked.filter((a) => a.helpful === true).length,
+            notHelpful: history.selfServe!.current.notHelpful + asked.filter((a) => a.helpful === false).length,
+          },
+        };
+        return delay({ ...history, selfServe, gaps: s.gaps.map(({ id, theme, count, lastSeenAt }) => ({ id, theme, count, lastSeenAt })).sort((a, b) => b.count - a.count), spikes: s.spikes.filter((spike) => +new Date(spike.detectedAt) >= +from) });
       },
 
       async listSpikes() {
@@ -1151,6 +1623,145 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
         const spike = s.spikes.find((x) => x.id === id);
         if (spike && !spike.acknowledgedAt) Object.assign(spike, { acknowledgedAt: new Date(), acknowledgedBy: VIEWER });
         return delay({ ok: true });
+      },
+
+      async draftOpening({ intent, customerId, contactId }) {
+        const said = toCustomer(intent);
+        if (!said) throw new Error("Say what the message should tell them.");
+        const who = contactId ? person(contactId) : null;
+        const account = ACCOUNTS.find((a) => a.id === (who?.customer?.id ?? customerId));
+        const first = who?.name?.split(" ")[0];
+        const hello = first ? `Hi ${first},` : "Hi,";
+        const facts = accountFacts(account?.id ?? null);
+        const fact = (label: string): SuggestionSource[] => {
+          const at = facts.findIndex((f) => f.label === label);
+          return at < 0 ? [] : [{ type: "fact", id: `fact:${at + 1}`, title: label }];
+        };
+        const [payout, payoutWhen] = account?.lastPayout?.split(" · ") ?? [];
+        const [invoice, amount] = account?.lastOrder.split(" · ") ?? [];
+        const close = "Reply to this message if you have any questions and I'll pick it up from here.";
+        if (/payout|bank/i.test(intent)) {
+          const known = payout && payoutWhen ? `Your last payout of ${payout} was ${payoutWhen}. ` : "";
+          return thinking({
+            subject: "About your payouts",
+            text: `${hello}\n\n${said}\n\n${known}Payouts leave our side every Monday, and banks take up to 3 business days to show them.\n\n${close}`,
+            sources: [...fact("Last payout"), ARTICLES.payouts],
+          });
+        }
+        if (/invoice|billing|\bvat\b|\btax|\bcard|charge/i.test(intent)) {
+          const known = amount ? `Your latest invoice is ${invoice} for ${amount}. ` : "";
+          return thinking({
+            subject: "About your billing",
+            text: `${hello}\n\n${said}\n\n${known}You can see every invoice under Billing, then Invoices.\n\n${close}`,
+            sources: [...fact("Last order"), ARTICLES.invoices],
+          });
+        }
+        if (/trial|verif|onboard|\bset ?up|\bstart/i.test(intent)) {
+          const known = account ? `${account.name} is on the ${account.plan} plan with ${account.seats} seats. ` : "";
+          return thinking({
+            subject: "Getting you set up",
+            text: `${hello}\n\n${said}\n\n${known}Our getting started guide covers verification, imports and inviting your team.\n\n${close}`,
+            sources: [...fact("Plan"), ARTICLES.start],
+          });
+        }
+        const known = account ? `This is about ${account.name}'s account with us, on the ${account.plan} plan since ${account.since}. ` : "";
+        return thinking({
+          subject: said.replace(/[.!?]+$/, "").slice(0, 70),
+          text: `${hello}\n\n${said}\n\n${known}${close}`,
+          sources: [...fact("Customer since"), ARTICLES.start],
+        });
+      },
+
+      async listOutreach(input) {
+        sendDueOutreach();
+        const waiting = ["drafting", "pending", "held", "sending", "failed"];
+        const rows = s.outreach.filter((o) => (input?.sent ? o.status === "sent" || o.status === "dismissed" : waiting.includes(o.status)));
+        if (input?.sent) rows.sort((a, b) => +new Date(b.decidedAt ?? b.createdAt) - +new Date(a.decidedAt ?? a.createdAt));
+        return delay(rows.map((o) => ({ ...o })));
+      },
+
+      async sendOutreach({ id, subject, text }) {
+        const o = s.outreach.find((x) => x.id === id);
+        if (!o) throw new Error("That message doesn't exist.");
+        if (o.status !== "pending" && o.status !== "held" && o.status !== "failed") throw new Error("This message was already sent or dismissed.");
+        const body = (text ?? o.text ?? "").trim();
+        if (!body) throw new Error("Write a message first.");
+        const t = deliverOutreach(o, VIEWER, (subject ?? o.subject ?? "").replace(/\s+/g, " ").trim(), body);
+        onChange();
+        return delay({ ticketId: t.id });
+      },
+
+      async dismissOutreach({ id }) {
+        const o = s.outreach.find((x) => x.id === id);
+        if (!o || o.status === "sent" || o.status === "dismissed" || o.status === "sending") throw new Error("This message was already sent or dismissed.");
+        Object.assign(o, { status: "dismissed", sendAt: null, decidedBy: VIEWER, decidedAt: new Date() });
+        const k = kindOf(o.kind);
+        if (k && o.drafted) k.record = { ...k.record, drafts: k.record.drafts + 1, discarded: k.record.discarded + 1 };
+        return delay({ ok: true });
+      },
+
+      async holdOutreach({ id }) {
+        const o = s.outreach.find((x) => x.id === id);
+        if (!o) throw new Error("That message doesn't exist.");
+        if (o.status !== "held") throw new Error("It has already been sent, or someone else stopped it.");
+        Object.assign(o, { status: "pending", sendAt: null, autoBlock: "held_back" });
+        return delay({ ok: true });
+      },
+
+      async getOutreachKinds() {
+        sendDueOutreach();
+        return delay({ autoSend: true, stopped: pilot.stopped, ...OUTREACH, kinds: s.outreachKinds.map((k) => ({ ...k, record: { ...k.record } })) });
+      },
+
+      async setOutreachKind({ kind, on }) {
+        const k = kindOf(kind);
+        if (!k) throw new Error("No signal of this kind has been reported.");
+        if (on && k.stage !== "on") {
+          const { good, drafts } = k.record.recent;
+          if (!kindMeets(k)) {
+            throw new Error(`"${kind}" isn't ready yet: ${good} of its last ${drafts} messages went out as drafted or lightly edited. It needs ${Math.round(OUTREACH.minRate * 100)}% of at least ${OUTREACH.minDrafts}.`);
+          }
+          Object.assign(k, { stage: "on", enabledBy: VIEWER, enabledAt: new Date(), pausedAt: null });
+        } else if (!on) {
+          Object.assign(k, { stage: kindMeets(k) ? "eligible" : "collecting", pausedAt: null });
+          // What was about to go out waits for an agent instead.
+          for (const o of s.outreach) if (o.kind === kind && o.status === "held") Object.assign(o, { status: "pending", sendAt: null, autoBlock: "held_back" });
+        }
+        return delay({ ok: true });
+      },
+
+      // The service asks for the spike to be acknowledged first; the demo lets you try it either way.
+      async previewBroadcast({ spikeId }) {
+        const spike = spikeOf(spikeId);
+        return delay({ spikeId, topic: spike.topic, channel: { id: "email", kind: CHANNELS.email.kind }, ...affected(spike) });
+      },
+
+      async draftBroadcast({ spikeId, intent }) {
+        const spike = spikeOf(spikeId);
+        const said = toCustomer(intent);
+        if (!said) throw new Error("Say what the message should tell them.");
+        const topic = spike.topic.toLowerCase();
+        return thinking({
+          subject: spike.topic === "Payouts" ? "An update on today's payouts" : `An update on ${topic}`,
+          text: `Hi {name},\n\nWe're writing because {company} is affected by a problem on our side with ${topic}. ${said}\n\nYou don't need to do anything. We'll write to you here as soon as it's resolved, and you can reply to this message if you have questions.`,
+        });
+      },
+
+      async sendBroadcast({ spikeId, subject, text }) {
+        const spike = spikeOf(spikeId);
+        if (!text.trim()) throw new Error("Write a message first.");
+        if (!subject.trim()) throw new Error("Add a subject.");
+        const { recipients } = affected(spike);
+        const messaged = s.broadcasts.get(spikeId) ?? new Set<string>();
+        s.broadcasts.set(spikeId, messaged);
+        for (const { customer: to, contact } of recipients) {
+          const values = { name: contact.name, company: to.name };
+          openConversation({ to: { contactId: contact.id }, customerId: to.id, subject: personalise(subject.replace(/\s+/g, " ").trim(), values) || spike.topic, text: personalise(text.trim(), values) }, VIEWER, { outreachId: nextId("out"), kind: INCIDENT_KIND, spikeId });
+          messaged.add(to.id);
+        }
+        spike.messaged = messaged.size;
+        if (recipients.length) onChange();
+        return delay({ recipients: recipients.length, sent: recipients.length, queued: 0, failed: 0 });
       },
 
       async refine({ ticketId, text, instruction }) {
@@ -1327,6 +1938,7 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
 
       async updateSettings(patch) {
         s.ai = { ...s.ai, ...patch };
+        if (patch.selfServe !== undefined) onChange(); // the portal's Ask box follows the switch
         return delay({ ok: true });
       },
 
@@ -1435,10 +2047,100 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
   };
   const mine = () => s.tickets.filter((t) => t.customerId === CUSTOMER.account && t.status !== "spam");
 
+  /** A request from the portal. `note` is what a hand-off from the Ask box leaves for the agent. */
+  const request = (subject: string, text: string, note?: string) => {
+    const at = new Date();
+    const id = nextId("tkt");
+    s.tickets.push({
+      id,
+      number: ++s.seq,
+      subject,
+      status: "open",
+      customerId: CUSTOMER.account,
+      assigneeId: null,
+      waitingSince: at,
+      createdAt: at,
+      channel: "email",
+      contact: { id: nextId("con"), name: CUSTOMER.name, identities: [{ kind: "email", value: CUSTOMER.email }], customerId: CUSTOMER.account, locale: "en" },
+      lastMessageAt: at,
+      answered: false,
+    });
+    s.messages.set(id, [
+      message({ kind: "inbound", text, createdAt: at, source: "portal", from: { address: CUSTOMER.email, name: CUSTOMER.name } }),
+      ...(note ? [message({ kind: "note", text: note, createdAt: new Date(+at + 1), source: "portal" })] : []),
+    ]);
+    s.events.set(id, []);
+    understand(s.tickets.at(-1)!, `${subject}. ${text}`, null);
+    onChange();
+    return id;
+  };
+
+  // The Ask box: four subjects it can answer from Northwind Coffee's account and the help center.
+  const fact = (label: string): SuggestionSource => ({ type: "fact", id: `fact:${accountFacts(CUSTOMER.account).findIndex((f) => f.label === label) + 1}`, title: label });
+  const northwind = ACCOUNTS.find((a) => a.id === CUSTOMER.account)!;
+  const [lastPayout, payoutWhen] = northwind.lastPayout!.split(" · ");
+  const [lastInvoice, lastAmount] = northwind.lastOrder.split(" · ");
+  const ANSWERS: { about: RegExp; text: string; sources: SuggestionSource[] }[] = [
+    {
+      about: /payout|paid out|\bbank|deposit|transfer/i,
+      text: `Your last payout of ${lastPayout} was ${payoutWhen}. Payouts leave our side every Monday, and banks take up to 3 business days to show them, so it should reach your account by Thursday.`,
+      sources: [fact("Last payout"), ARTICLES.payouts],
+    },
+    {
+      about: /refund|money back|chargeback/i,
+      text: `You can refund an order from Orders: open it and choose Refund. Refunds are available for 30 days after the payment and go back to the original payment method within 5 business days. Your most recent order is ${lastInvoice} for ${lastAmount}.`,
+      sources: [ARTICLES.refunds, fact("Last order")],
+    },
+    {
+      about: /invoice|receipt|billing|\bvat\b|\btax/i,
+      text: `You can download any invoice from Billing, then Invoices: open it and choose Download PDF. To add a VAT number or correct an address, use Billing, then Company details. Your latest invoice is ${lastInvoice} for ${lastAmount}.`,
+      sources: [ARTICLES.invoices, fact("Last order")],
+    },
+    {
+      about: /\b(plan|seats?|upgrade|admins?|team|invite|users?)\b/i,
+      text: `${northwind.name} is on the ${northwind.plan} plan with ${northwind.seats} seats. To add someone, go to Settings, then Team, choose Invite and pick their role. They'll get an email to join.`,
+      sources: [fact("Plan"), ARTICLES.team],
+    },
+  ];
+  const WANTS_PERSON = /\b(person|human|agent|someone|somebody|representative|call|phone)\b/i;
+
   const portal: SupportPortalClient = {
     async list() {
       const items = mine().sort((a, b) => +b.lastMessageAt - +a.lastMessageAt).map(portalTicket);
-      return delay({ items, total: items.length });
+      return delay({ items, total: items.length, ask: s.ai.selfServe === true });
+    },
+    async ask({ question, sessionId }) {
+      const asked = question.replace(/\s+/g, " ").trim();
+      if (!asked) throw new Error("Write a question first.");
+      if (!s.ai.selfServe) throw new Error("Instant answers aren't available right now.");
+      const id = sessionId && s.asks.has(sessionId) ? sessionId : nextId("ask");
+      const session = s.asks.get(id) ?? { turns: [], helpful: null, ticketId: null };
+      s.asks.set(id, session);
+      const answer = WANTS_PERSON.test(asked) ? null : ANSWERS.find((a) => a.about.test(asked));
+      const result: AskResult = answer
+        ? { sessionId: id, kind: "answer", text: answer.text, sources: answer.sources }
+        : { sessionId: id, kind: "handoff", reason: WANTS_PERSON.test(asked) ? "asked_for_human" : "cannot_answer" };
+      session.turns.push({
+        question: asked,
+        kind: result.kind,
+        text: result.kind === "answer" ? result.text : null,
+        reason: result.kind === "handoff" ? result.reason : null,
+        sources: result.kind === "answer" ? result.sources : [],
+        at: new Date(),
+      });
+      return thinking(result);
+    },
+    async rateAnswer({ sessionId, helpful }) {
+      const session = s.asks.get(sessionId);
+      if (session) session.helpful = helpful;
+      return delay({ ok: true });
+    },
+    async escalate({ sessionId, text }) {
+      const session = s.asks.get(sessionId);
+      if (!session?.turns.length) throw new Error("This conversation has ended. Send your question as a new request.");
+      const id = request(session.turns[0]!.question.slice(0, 200), text?.trim() || session.turns.at(-1)!.question, handoffNote(session.turns));
+      session.ticketId = id;
+      return delay({ id });
     },
     async get(id) {
       const t = mine().find((x) => x.id === id);
@@ -1457,27 +2159,7 @@ export function createDemoClients(onChange: () => void): { agent: SupportClient;
       return delay({ ticket: { id: t.id, subject: t.subject, status: t.status, createdAt: t.createdAt }, messages });
     },
     async create({ subject, text }) {
-      const at = new Date();
-      const id = nextId("tkt");
-      s.tickets.push({
-        id,
-        number: ++s.seq,
-        subject,
-        status: "open",
-        customerId: CUSTOMER.account,
-        assigneeId: null,
-        waitingSince: at,
-        createdAt: at,
-        channel: "email",
-        contact: { id: nextId("con"), name: CUSTOMER.name, identities: [{ kind: "email", value: CUSTOMER.email }], customerId: CUSTOMER.account, locale: "en" },
-        lastMessageAt: at,
-        answered: false,
-      });
-      s.messages.set(id, [message({ kind: "inbound", text, createdAt: at, source: "portal", from: { address: CUSTOMER.email, name: CUSTOMER.name } })]);
-      s.events.set(id, []);
-      understand(s.tickets.at(-1)!, `${subject}. ${text}`, null);
-      onChange();
-      return delay({ id });
+      return delay({ id: request(subject, text) });
     },
     async reply({ ticketId, text }) {
       const t = mine().find((x) => x.id === ticketId);
@@ -1629,7 +2311,20 @@ const sample = (() => {
         };
       };
       const n = total(0, days);
+      // About 48 conversations a month in the Ask box, a little more than the month before.
+      const asked = (scale: number) => {
+        const conversations = Math.round(days * 1.6 * scale);
+        return {
+          conversations,
+          answered: Math.round(conversations * 0.854),
+          deflected: Math.round(conversations * 0.604),
+          escalated: Math.round(conversations * 0.1875),
+          helpful: Math.round(conversations * 0.458),
+          notHelpful: Math.round(conversations * 0.083),
+        };
+      };
       return {
+        selfServe: { current: asked(1), previous: asked(0.85) },
         topics,
         urgency: { current: urgency(n, 0.045), previous: urgency(total(days, 2 * days), 0.04) },
         mood: { current: moods(0, days), previous: moods(days, 2 * days), days: Array.from({ length: days }, (_, i) => mood(days - 1 - i)) },

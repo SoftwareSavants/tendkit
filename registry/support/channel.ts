@@ -51,7 +51,23 @@ export type ChannelCapabilities = {
   /** Hours after the customer's last message during which free-form replies are allowed. */
   replyWindowHours: number | null;
   deliveryReceipts: boolean;
+  /**
+   * Whether your team can write first on this channel (`startTicket`). Email and SMS can.
+   * Channels where the customer has to write first can't: WhatsApp outside its 24-hour window
+   * needs an approved template, a Telegram bot can only answer, and the API channel only receives.
+   * Left out, a channel can when it has no reply window and isn't the API channel.
+   */
+  canStartConversation?: boolean;
 };
+
+/** Whether your team can write first on a channel, and why not when it can't. */
+export function startBlockedReason(channel: Pick<Channel, "kind" | "capabilities">): "needs_template" | "not_supported" | null {
+  const { canStartConversation, replyWindowHours } = channel.capabilities;
+  if (canStartConversation === true) return null;
+  if (replyWindowHours !== null) return "needs_template";
+  if (canStartConversation === false || channel.kind === "api") return "not_supported";
+  return null;
+}
 
 export type ChannelState = Record<string, unknown>;
 

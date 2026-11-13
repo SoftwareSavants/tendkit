@@ -1,12 +1,14 @@
 import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, max, min, ne, notInArray, or, sql } from "drizzle-orm";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
-import { DEFAULT_AI_SETTINGS, URGENCY_RANK, type AiSettings, type AiStore, type AutopilotTopic, type ExampleRow, type InsightRow, type SuggestionRow } from "../ai-store";
+import { DEFAULT_AI_SETTINGS, URGENCY_RANK, type AiSettings, type AiStore, type AutopilotTopic, type ExampleRow, type InsightRow, type OutreachKind, type SuggestionRow } from "../ai-store";
+import type { AskSession, Outreach } from "../proactive";
 import { LIGHT_EDIT, type OutcomeRow } from "../autopilot";
 import type { ActionRun, ApprovedAnswer, AutopilotBlock, AutopilotState, Gap, GuidanceSuggestion, Mood, Suggestion, SuggestionStatus, Urgency } from "../types";
 import {
   supportActionRuns,
   supportAiSettings,
   supportApprovedAnswers,
+  supportAskSessions,
   supportAutopilotTopics,
   supportExamples,
   supportExampleTerms,
@@ -14,12 +16,18 @@ import {
   supportGapTickets,
   supportGuidanceSuggestions,
   supportKnowledge,
+  supportOutreach,
+  supportOutreachKinds,
+  supportSignals,
   supportSpikes,
   supportSuggestions,
   supportTicketInsights,
 } from "./ai-schema";
 import { supportEvents, supportTickets } from "./schema";
-import { dayOf, distributions, elapsed, firstReplies, num } from "./stats";
+import { at as moment, dayOf, distributions, elapsed, firstReplies, num } from "./stats";
+
+const YES = sql.raw("true");
+const NO = sql.raw("false");
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Db = PgDatabase<PgQueryResultHKT, any, any>;
@@ -714,8 +722,229 @@ export function createPostgresAiStore(db: Db): AiStore {
         .returning({ id: supportSpikes.id });
       return rows.length > 0;
     },
+    /* Proactive and self-serve (0007_proactive.sql). */
+
+    async insertSignal(input) {
+      const [row] = await db.insert(supportSignals).values(input).onConflictDoNothing().returning({ id: supportSignals.id });
+      return row ?? null;
+    },
+
+    async signalByKey(dedupeKey) {
+      const [row] = await db
+        .select({ id: supportSignals.id, outreachId: supportSignals.outreachId })
+        .from(supportSignals)
+        .where(eq(supportSignals.dedupeKey, dedupeKey))
+        .limit(1);
+      return row ?? null;
+    },
+
+    async setSignalOutcome(id, outcome) {
+      await db
+        .update(supportSignals)
+        .set({ status: outcome.status, reason: outcome.reason ?? null, outreachId: outcome.outreachId ?? null })
+        .where(eq(supportSignals.id, id));
+    },
+
+    async countProposedSignals(since) {
+      const [row] = await db
+        .select({ signals: count() })
+        .from(supportSignals)
+        .where(and(eq(supportSignals.status, "proposed"), gte(supportSignals.createdAt, since)));
+      return Number(row?.signals ?? 0);
+    },
+
+    async insertOutreach(input) {
+      const [row] = await db.insert(supportOutreach).values(input).onConflictDoNothing().returning();
+      return row ? toOutreach(row) : null;
+    },
+
+    async getOutreach(id) {
+      const [row] = await db.select().from(supportOutreach).where(eq(supportOutreach.id, id)).limit(1);
+      return row ? toOutreach(row) : null;
+    },
+
+    async updateOutreach(id, patch) {
+      await db.update(supportOutreach).set(patch).where(eq(supportOutreach.id, id));
+    },
+
+    async listOutreach({ statuses, customerId, kind, spikeId, since, limit }) {
+      const rows = await db
+        .select()
+        .from(supportOutreach)
+        .where(
+          and(
+            statuses ? inArray(supportOutreach.status, statuses) : undefined,
+            customerId ? eq(supportOutreach.customerId, customerId) : undefined,
+            kind ? eq(supportOutreach.kind, kind) : undefined,
+            spikeId ? eq(supportOutreach.spikeId, spikeId) : undefined,
+            since ? gte(supportOutreach.createdAt, since) : undefined
+          )
+        )
+        .orderBy(desc(supportOutreach.createdAt), desc(supportOutreach.id))
+        .limit(limit);
+      return rows.map(toOutreach);
+    },
+
+    async listOutreachToDraft({ before, maxAttempts, limit }) {
+      const rows = await db
+        .select()
+        .from(supportOutreach)
+        .where(and(eq(supportOutreach.status, "drafting"), lt(supportOutreach.attempts, maxAttempts), lt(supportOutreach.createdAt, before)))
+        .orderBy(asc(supportOutreach.createdAt))
+        .limit(limit);
+      return rows.map(toOutreach);
+    },
+
+    async listOutreachDue({ dueBefore, limit }) {
+      const rows = await db
+        .select()
+        .from(supportOutreach)
+        .where(and(eq(supportOutreach.status, "held"), lte(supportOutreach.sendAt, dueBefore)))
+        .orderBy(asc(supportOutreach.sendAt))
+        .limit(limit);
+      return rows.map(toOutreach);
+    },
+
+    async moveOutreach(id, from, patch) {
+      const rows = await db
+        .update(supportOutreach)
+        .set(patch)
+        .where(and(eq(supportOutreach.id, id), inArray(supportOutreach.status, from)))
+        .returning({ id: supportOutreach.id });
+      return rows.length > 0;
+    },
+
+    async countOutreachSent({ since, auto }) {
+      const [row] = await db
+        .select({ sent: count() })
+        .from(supportOutreach)
+        .where(and(eq(supportOutreach.status, "sent"), gte(supportOutreach.decidedAt, since), auto ? eq(supportOutreach.auto, true) : undefined));
+      return Number(row?.sent ?? 0);
+    },
+
+    async countSpikeOutreach(spikeIds) {
+      if (!spikeIds.length) return new Map();
+      const rows = await db
+        .select({ spikeId: supportOutreach.spikeId, messages: count() })
+        .from(supportOutreach)
+        .where(and(inArray(supportOutreach.spikeId, spikeIds), inArray(supportOutreach.status, ["held", "sending", "sent"])))
+        .groupBy(supportOutreach.spikeId);
+      return new Map(rows.map((row) => [row.spikeId!, Number(row.messages)]));
+    },
+
+    async listOutreachKinds() {
+      const rows = await db.select().from(supportOutreachKinds);
+      return rows.map((row) => ({
+        kind: row.kind,
+        status: row.status as OutreachKind["status"],
+        enabledBy: row.enabledBy,
+        enabledAt: row.enabledAt,
+        pausedAt: row.pausedAt,
+      }));
+    },
+
+    async saveOutreachKind(kind) {
+      const row = { ...kind, updatedAt: new Date() };
+      await db.insert(supportOutreachKinds).values(row).onConflictDoUpdate({ target: supportOutreachKinds.kind, set: row });
+    },
+
+    async pauseOutreachKind(kind, at) {
+      const rows = await db
+        .update(supportOutreachKinds)
+        .set({ status: "paused", pausedAt: at, updatedAt: at })
+        .where(and(eq(supportOutreachKinds.kind, kind), eq(supportOutreachKinds.status, "on")))
+        .returning({ kind: supportOutreachKinds.kind });
+      return rows.length > 0;
+    },
+
+    async listSignalKinds(since) {
+      const rows = await db
+        .select({ kind: supportSignals.kind, title: max(supportSignals.title), lastAt: max(supportSignals.createdAt) })
+        .from(supportSignals)
+        .where(gte(supportSignals.createdAt, since))
+        .groupBy(supportSignals.kind)
+        .orderBy(desc(max(supportSignals.createdAt)));
+      return rows.map((row) => ({ kind: row.kind, title: row.title ?? row.kind, lastAt: new Date(row.lastAt!) }));
+    },
+
+    async insertAskSession(input) {
+      const [row] = await db
+        .insert(supportAskSessions)
+        .values({ customerId: input.customerId, userId: input.userId, createdAt: input.createdAt, lastAt: input.createdAt })
+        .returning();
+      return toAskSession(row!);
+    },
+
+    async getAskSession(id) {
+      // An id from the browser may be anything: one that isn't a session's is simply not found.
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+      const [row] = await db.select().from(supportAskSessions).where(eq(supportAskSessions.id, id)).limit(1);
+      return row ? toAskSession(row) : null;
+    },
+
+    async addAskTurn(id, turn, at) {
+      const [row] = await db.select({ turns: supportAskSessions.turns }).from(supportAskSessions).where(eq(supportAskSessions.id, id)).limit(1);
+      if (!row) return;
+      await db
+        .update(supportAskSessions)
+        .set({
+          turns: [...row.turns, turn],
+          questions: sql`${supportAskSessions.questions} + 1`,
+          answered: turn.kind === "answer" ? sql`${supportAskSessions.answered} + 1` : sql`${supportAskSessions.answered}`,
+          // A new question makes the earlier rating about an earlier answer.
+          helpful: null,
+          lastAt: at,
+        })
+        .where(eq(supportAskSessions.id, id));
+    },
+
+    async updateAskSession(id, patch) {
+      await db.update(supportAskSessions).set(patch).where(eq(supportAskSessions.id, id));
+    },
+
+    async countAskQuestions(customerId, since) {
+      const [row] = await db
+        .select({ questions: num(sql`coalesce(sum(${supportAskSessions.questions}), 0)`) })
+        .from(supportAskSessions)
+        .where(and(eq(supportAskSessions.customerId, customerId), gte(supportAskSessions.lastAt, since)));
+      return row?.questions ?? 0;
+    },
+
+    async selfServeStats({ from, to, quietBefore }) {
+      // Resolved without a ticket: answered, not handed off, and either a thumbs-up, or no rating,
+      // nothing asked since `quietBefore` and no ticket from that person since the conversation began.
+      const followed = sql`exists (select 1 from support_tickets t inner join support_contacts c on c.id = t.contact_id where t.customer_id = ${supportAskSessions.customerId} and c.user_id = ${supportAskSessions.userId} and t.created_at >= ${supportAskSessions.createdAt})`;
+      const deflected = sql`${supportAskSessions.answered} > 0 and ${supportAskSessions.ticketId} is null and (${supportAskSessions.helpful} = ${YES} or (${supportAskSessions.helpful} is null and ${supportAskSessions.lastAt} < ${moment(quietBefore)} and not ${followed}))`;
+      const [row] = await db
+        .select({
+          conversations: count(),
+          answered: num(sql`coalesce(sum(case when ${supportAskSessions.answered} > 0 then 1 else 0 end), 0)`),
+          deflected: num(sql`coalesce(sum(case when ${deflected} then 1 else 0 end), 0)`),
+          escalated: num(sql`coalesce(sum(case when ${supportAskSessions.ticketId} is not null then 1 else 0 end), 0)`),
+          helpful: num(sql`coalesce(sum(case when ${supportAskSessions.helpful} = ${YES} then 1 else 0 end), 0)`),
+          notHelpful: num(sql`coalesce(sum(case when ${supportAskSessions.helpful} = ${NO} then 1 else 0 end), 0)`),
+        })
+        .from(supportAskSessions)
+        .where(and(gte(supportAskSessions.createdAt, from), lt(supportAskSessions.createdAt, to)));
+      return {
+        conversations: Number(row?.conversations ?? 0),
+        answered: row?.answered ?? 0,
+        deflected: row?.deflected ?? 0,
+        escalated: row?.escalated ?? 0,
+        helpful: row?.helpful ?? 0,
+        notHelpful: row?.notHelpful ?? 0,
+      };
+    },
   };
   return store;
+}
+
+function toOutreach(row: typeof supportOutreach.$inferSelect): Outreach {
+  return { ...row, status: row.status as Outreach["status"], autoBlock: row.autoBlock as Outreach["autoBlock"] };
+}
+
+function toAskSession(row: typeof supportAskSessions.$inferSelect): AskSession {
+  return { id: row.id, customerId: row.customerId, userId: row.userId, turns: row.turns, helpful: row.helpful, ticketId: row.ticketId, createdAt: row.createdAt, lastAt: row.lastAt };
 }
 
 function toSettings(row: typeof supportAiSettings.$inferSelect): AiSettings {
@@ -731,6 +960,7 @@ function toSettings(row: typeof supportAiSettings.$inferSelect): AiSettings {
     autopilotStoppedBy: row.autopilotStoppedBy,
     autopilotMinDrafts: row.autopilotMinDrafts,
     autopilotMinRate: row.autopilotMinRate,
+    selfServe: row.selfServe,
   };
 }
 

@@ -126,6 +126,8 @@ export function twilioChannel(options: TwilioChannelOptions): Channel {
       conversation: "contact",
       replyWindowHours: whatsapp ? 24 : null,
       deliveryReceipts: true,
+      // SMS can write first. WhatsApp needs an approved template outside its 24-hour window.
+      canStartConversation: !whatsapp,
     },
 
     async webhook(request) {

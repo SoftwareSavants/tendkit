@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useSupport, toDate } from "./provider";
 import type { AiInsights, DateLike, DaySeries, Distribution, DraftShare, Spike, SupportStats, Urgency } from "./client";
 import { formatSpan, formatWhen } from "./format";
+import { BroadcastDialog } from "./outreach";
 
 /*
  * Insights: how support is going and what customers struggle with. Speed, volume, load and
@@ -117,6 +118,7 @@ export function SupportInsights() {
         <div className={cn("space-y-8 transition-opacity", ai.isPlaceholderData && "opacity-60")}>
           <Topics data={ai.data} days={days} from={period.from} />
           <AiShare data={ai.data} days={days} />
+          <SelfServe data={ai.data} days={days} />
           <div className="grid gap-8 lg:grid-cols-2">
             <GapList data={ai.data} />
             <SpikeHistory data={ai.data} />
@@ -752,6 +754,38 @@ function AiShare({ data, days }: { data: AiInsights; days: Days }) {
   );
 }
 
+/** The portal's Ask box: how many conversations ended without a ticket, by a thumbs-up or by a quiet day. */
+function SelfServe({ data, days }: { data: AiInsights; days: Days }) {
+  const { t, locale } = useSupport();
+  const now = data.selfServe?.current;
+  const before = data.selfServe?.previous;
+  if (!now || !before || (!now.conversations && !before.conversations)) return null;
+  const rated = now.helpful + now.notHelpful;
+  return (
+    <Section title={t("insights.selfServe.heading")}>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Tile
+          label={t("insights.selfServe.deflected")}
+          value={
+            <>
+              {number(now.deflected, locale)}
+              <Delta now={now.deflected} before={before.deflected} days={days} better="higher" />
+            </>
+          }
+        >
+          {t("insights.selfServe.deflectedOf", { count: number(now.conversations, locale) })}
+        </Tile>
+        <Tile label={t("insights.selfServe.escalated")} value={number(now.escalated, locale)} />
+        {rated > 0 && (
+          <Tile label={t("insights.selfServe.helpful")} value={percent(now.helpful / rated, locale)}>
+            {t("insights.selfServe.helpfulOf", { count: number(rated, locale) })}
+          </Tile>
+        )}
+      </div>
+    </Section>
+  );
+}
+
 function GapList({ data }: { data: AiInsights }) {
   const { t, locale, aiSettingsHref } = useSupport();
   const href = aiSettingsHref ? `${aiSettingsHref}#support-gaps` : null;
@@ -817,9 +851,27 @@ export function SpikeAlerts({ tickets = true }: { tickets?: boolean }) {
       void queryClient.invalidateQueries({ queryKey: ["support", "ai", "insights"] });
     },
   });
-  if (!spikes.data?.length) return null;
+  // Saying it is an incident and writing to the customers it affects are one step: the spike is
+  // acknowledged, then the dialog shows who would be written to before anything is sent.
+  const [messaging, setMessaging] = useState<Pick<Spike, "id" | "topic"> | null>(null);
+  const incident = useMutation({
+    mutationFn: (spike: Spike) => ai!.acknowledgeSpike!({ id: spike.id }),
+    onSuccess: (_, spike) => setMessaging({ id: spike.id, topic: spike.topic }),
+  });
+  const dialog = messaging && (
+    <BroadcastDialog
+      spike={messaging}
+      onClose={() => {
+        setMessaging(null);
+        void queryClient.invalidateQueries({ queryKey: ["support", "ai", "spikes"] });
+        void queryClient.invalidateQueries({ queryKey: ["support", "ai", "insights"] });
+      }}
+    />
+  );
+  if (!spikes.data?.length) return dialog || null;
   return (
     <div className="space-y-3">
+      {dialog}
       {spikes.data.map((spike) => (
         <div key={spike.id} role="alert" className="rounded-xl border border-amber-300/70 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-500/10">
           <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
@@ -841,9 +893,15 @@ export function SpikeAlerts({ tickets = true }: { tickets?: boolean }) {
                 {t("insights.viewTickets")}
               </Link>
               {ai?.acknowledgeSpike && (
-                <Button type="button" variant="outline" size="sm" disabled={acknowledge.isPending} onClick={() => acknowledge.mutate(spike.id)}>
+                <Button type="button" variant="outline" size="sm" disabled={acknowledge.isPending || incident.isPending} onClick={() => acknowledge.mutate(spike.id)}>
                   {acknowledge.isPending && acknowledge.variables === spike.id && <Loader2 className="size-4 animate-spin" />}
                   {t("insights.spike.acknowledge")}
+                </Button>
+              )}
+              {ai?.acknowledgeSpike && ai.previewBroadcast && ai.sendBroadcast && (
+                <Button type="button" size="sm" disabled={acknowledge.isPending || incident.isPending} onClick={() => incident.mutate(spike)}>
+                  {incident.isPending && incident.variables?.id === spike.id && <Loader2 className="size-4 animate-spin" />}
+                  {t("broadcast.open")}
                 </Button>
               )}
             </div>
@@ -869,7 +927,9 @@ export function SpikeAlerts({ tickets = true }: { tickets?: boolean }) {
 }
 
 function SpikeHistory({ data }: { data: AiInsights }) {
-  const { t, locale, inboxHref } = useSupport();
+  const { client, t, locale, inboxHref } = useSupport();
+  const [messaging, setMessaging] = useState<Pick<Spike, "id" | "topic"> | null>(null);
+  const canMessage = Boolean(client.ai?.previewBroadcast && client.ai.sendBroadcast);
   if (!data.spikes.length) return null;
   const when = (value: DateLike) => formatWhen(value, locale);
   return (
@@ -888,11 +948,21 @@ function SpikeHistory({ data }: { data: AiInsights }) {
                 {spike.endedAt ? t("insights.spike.ended", { when: when(spike.endedAt) }) : t("insights.spike.ongoing")}
                 {" · "}
                 {spike.acknowledgedBy ? t("insights.spike.acknowledgedBy", { name: spike.acknowledgedBy.name }) : t("insights.spike.unacknowledged")}
+                {spike.messaged ? ` · ${t("insights.spike.messaged", { count: number(spike.messaged, locale) })}` : ""}
               </span>
             </Link>
+            {/* An acknowledged incident whose customers haven't heard from you yet. */}
+            {canMessage && spike.acknowledgedAt && !spike.messaged && (
+              <div className="px-4 pb-2.5">
+                <Button type="button" variant="outline" size="sm" onClick={() => setMessaging({ id: spike.id, topic: spike.topic })}>
+                  {t("broadcast.open")}
+                </Button>
+              </div>
+            )}
           </li>
         ))}
       </ul>
+      {messaging && <BroadcastDialog spike={messaging} onClose={() => setMessaging(null)} />}
     </Section>
   );
 }

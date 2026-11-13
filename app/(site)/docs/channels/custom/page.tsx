@@ -24,6 +24,7 @@ export function acmeChatChannel(config: { id: string; apiKey: string; signingSec
       conversation: "contact", // one running conversation per person
       replyWindowHours: null,
       deliveryReceipts: false,
+      canStartConversation: false, // the customer has to write first
     },
 
     async webhook(request) {
@@ -78,7 +79,7 @@ export default function Custom() {
           { name: "kind", type: '"email" | "sms" | "whatsapp" | "telegram" | "api"', required: true, description: "How the inbox treats it: email gets subjects, HTML and threading headers." },
           { name: "identityKind", type: "IdentityKind", required: true, description: "How senders are identified: email or phone, for example." },
           { name: "address", type: "string", required: true, description: "What customers write to, for display." },
-          { name: "capabilities", type: "ChannelCapabilities", required: true, description: "Subjects, attachment limits, maximum length, one conversation per thread or per person, any reply window, and delivery receipts. The composer enforces them." },
+          { name: "capabilities", type: "ChannelCapabilities", required: true, description: "Subjects, attachment limits, maximum length, one conversation per thread or per person, any reply window, delivery receipts, and whether your team can write first (canStartConversation). The composer enforces them." },
           { name: "replyAddress", type: "string", description: "Email only: an address that routes back, carrying the ticket token." },
           { name: "webhook", type: "(request) => { events, response? }", description: "Verify, parse, return events. Return response when the provider expects a specific body." },
           { name: "sync", type: "(state) => { events, state }", description: "For polled providers and renewing subscriptions. Called by runScheduled with the last state." },
@@ -102,6 +103,12 @@ export default function Custom() {
         </li>
         <li>
           <code>sync</code> must be safe to run twice at once: returning the same events again is fine.
+        </li>
+        <li>
+          Set <code>canStartConversation</code> to say whether <code>send</code> can reach someone who hasn&apos;t
+          written yet, which is what <code>startTicket</code> and outreach need. It is optional: left out, a channel
+          can write first when it has no reply window and its kind isn&apos;t <code>&quot;api&quot;</code>. A channel
+          with a reply window is reported as needing a template unless you set it to <code>true</code>.
         </li>
       </ul>
 

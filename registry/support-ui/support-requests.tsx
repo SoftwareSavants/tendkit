@@ -15,6 +15,7 @@ import { usePortal } from "./provider";
 import type { PortalTicket, TicketStatus } from "./client";
 import { formatTimestamp, formatWhen } from "./format";
 import { AttachmentChip, MessageText } from "./parts";
+import { SupportAsk } from "./support-ask";
 
 /** A customer's own requests, inside your app. Conversations also continue by email. */
 export function SupportRequests({ newRequestOpen, onNewRequestOpenChange }: { newRequestOpen: boolean; onNewRequestOpenChange: (open: boolean) => void }) {
@@ -23,6 +24,11 @@ export function SupportRequests({ newRequestOpen, onNewRequestOpenChange }: { ne
 
   return (
     <>
+      {client.ask && list.data?.ask && (
+        <div className="mb-4">
+          <SupportAsk />
+        </div>
+      )}
       {list.error ? (
         <div className="rounded-xl border bg-card px-4 py-12 text-center">
           <p className="text-sm text-destructive">{t("errors.load")}</p>

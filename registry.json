@@ -43,6 +43,11 @@
           "path": "registry/support/insights.ts",
           "type": "registry:file",
           "target": "~/lib/support/insights.ts"
+        },
+        {
+          "path": "registry/support/proactive.ts",
+          "type": "registry:file",
+          "target": "~/lib/support/proactive.ts"
         }
       ]
     },
@@ -215,6 +220,11 @@
           "path": "registry/support/postgres/migrations/0006_insights_ai.sql",
           "type": "registry:file",
           "target": "~/lib/support/postgres/0006_insights_ai.sql"
+        },
+        {
+          "path": "registry/support/postgres/migrations/0007_proactive.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/postgres/0007_proactive.sql"
         }
       ]
     },
@@ -265,6 +275,11 @@
           "path": "registry/support/d1/migrations/0006_insights_ai.sql",
           "type": "registry:file",
           "target": "~/lib/support/d1/0006_insights_ai.sql"
+        },
+        {
+          "path": "registry/support/d1/migrations/0007_proactive.sql",
+          "type": "registry:file",
+          "target": "~/lib/support/d1/0007_proactive.sql"
         }
       ]
     },
@@ -544,6 +559,21 @@
           "path": "registry/support-ui/messages/en.json",
           "type": "registry:file",
           "target": "~/components/support/messages/en.json"
+        },
+        {
+          "path": "registry/support-ui/new-ticket-dialog.tsx",
+          "type": "registry:file",
+          "target": "~/components/support/new-ticket-dialog.tsx"
+        },
+        {
+          "path": "registry/support-ui/outreach.tsx",
+          "type": "registry:file",
+          "target": "~/components/support/outreach.tsx"
+        },
+        {
+          "path": "registry/support-ui/support-ask.tsx",
+          "type": "registry:file",
+          "target": "~/components/support/support-ask.tsx"
         }
       ]
     }

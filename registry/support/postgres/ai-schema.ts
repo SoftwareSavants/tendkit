@@ -1,6 +1,7 @@
 import { sql } from "drizzle-orm";
 import { boolean, index, integer, jsonb, pgTable, primaryKey, real, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
-import type { ProposedAction, SuggestionSource } from "../types";
+import type { AskTurn } from "../proactive";
+import type { AccountFact, ProposedAction, SuggestionSource } from "../types";
 import { supportTickets } from "./schema";
 
 /* Copilot's tables. Only needed when you configure `ai` in createSupport. */
@@ -23,6 +24,8 @@ export const supportAiSettings = pgTable("support_ai_settings", {
   /** The team's own thresholds, when stricter than the ones in code. */
   autopilotMinDrafts: integer("autopilot_min_drafts"),
   autopilotMinRate: real("autopilot_min_rate"),
+  /** The portal's Ask box answers customers (0007_proactive.sql). */
+  selfServe: boolean("self_serve").notNull().default(false),
   updatedAt: at("updated_at").notNull().defaultNow(),
 });
 
@@ -301,6 +304,105 @@ export const supportSpikes = pgTable(
   ]
 );
 
+/* Proactive and self-serve (0007_proactive.sql): signals from your product, the outreach they lead to, and the portal's Ask box. */
+
+/** Every signal your product reported, and what became of it. */
+export const supportSignals = pgTable(
+  "support_signals",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: text("customer_id").notNull(),
+    kind: text("kind").notNull(),
+    title: text("title").notNull(),
+    facts: jsonb("facts").$type<AccountFact[]>().notNull().default([]),
+    /** The same key reported twice does nothing the second time. */
+    dedupeKey: text("dedupe_key"),
+    /** proposed, duplicate or suppressed. Null until it's decided. */
+    status: text("status"),
+    reason: text("reason"),
+    outreachId: uuid("outreach_id"),
+    createdAt: at("created_at").notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("support_signals_dedupe_idx").on(t.dedupeKey), index("support_signals_status_idx").on(t.status, t.createdAt), index("support_signals_kind_idx").on(t.kind, t.createdAt)]
+);
+
+/** Messages to customers who haven't written: proposed from a signal, or one of an incident's. */
+export const supportOutreach = pgTable(
+  "support_outreach",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    signalId: uuid("signal_id"),
+    spikeId: uuid("spike_id"),
+    customerId: text("customer_id").notNull(),
+    kind: text("kind").notNull(),
+    title: text("title").notNull(),
+    facts: jsonb("facts").$type<AccountFact[]>().notNull().default([]),
+    contactId: uuid("contact_id"),
+    channelId: text("channel_id"),
+    subject: text("subject"),
+    text: text("text"),
+    /** What was drafted, kept to measure how much an agent changed. */
+    draft: text("draft"),
+    sources: jsonb("sources").$type<SuggestionSource[]>().notNull().default([]),
+    language: text("language"),
+    confident: boolean("confident").notNull().default(false),
+    /** drafting, pending, held, sending, sent, dismissed or failed. */
+    status: text("status").notNull().default("drafting"),
+    sendAt: at("send_at"),
+    /** Why a message of a kind that sends on its own waits for a person. */
+    autoBlock: text("auto_block"),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    ticketId: uuid("ticket_id"),
+    messageId: uuid("message_id"),
+    decidedBy: text("decided_by"),
+    /** Sent with nobody reading it first. */
+    auto: boolean("auto").notNull().default(false),
+    change: real("change"),
+    createdAt: at("created_at").notNull().defaultNow(),
+    decidedAt: at("decided_at"),
+  },
+  (t) => [
+    index("support_outreach_status_idx").on(t.status, t.sendAt),
+    index("support_outreach_customer_idx").on(t.customerId, t.kind, t.createdAt),
+    index("support_outreach_kind_idx").on(t.kind, t.createdAt),
+    /** One message per customer about an incident, however many times it is approved. */
+    uniqueIndex("support_outreach_spike_idx").on(t.spikeId, t.customerId).where(sql`${t.spikeId} is not null`),
+  ]
+);
+
+/** One row per outreach kind someone switched to send on its own. */
+export const supportOutreachKinds = pgTable("support_outreach_kinds", {
+  kind: text("kind").primaryKey(),
+  /** on, paused or off. */
+  status: text("status").notNull().default("off"),
+  enabledBy: text("enabled_by"),
+  enabledAt: at("enabled_at"),
+  pausedAt: at("paused_at"),
+  updatedAt: at("updated_at").notNull().defaultNow(),
+});
+
+/** Conversations in the portal's Ask box: what a signed-in customer asked, and what they got. */
+export const supportAskSessions = pgTable(
+  "support_ask_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    customerId: text("customer_id").notNull(),
+    userId: text("user_id").notNull(),
+    turns: jsonb("turns").$type<AskTurn[]>().notNull().default([]),
+    questions: integer("questions").notNull().default(0),
+    /** Questions that got an answer. */
+    answered: integer("answered").notNull().default(0),
+    /** The customer's latest thumbs-up or thumbs-down. */
+    helpful: boolean("helpful"),
+    /** The ticket it was handed off to. */
+    ticketId: uuid("ticket_id"),
+    createdAt: at("created_at").notNull().defaultNow(),
+    lastAt: at("last_at").notNull().defaultNow(),
+  },
+  (t) => [index("support_ask_sessions_customer_idx").on(t.customerId, t.lastAt), index("support_ask_sessions_created_idx").on(t.createdAt)]
+);
+
 export const supportAiSchema = {
   supportAiSettings,
   supportKnowledge,
@@ -315,4 +417,8 @@ export const supportAiSchema = {
   supportActionRuns,
   supportAutopilotTopics,
   supportSpikes,
+  supportSignals,
+  supportOutreach,
+  supportOutreachKinds,
+  supportAskSessions,
 };

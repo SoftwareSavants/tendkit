@@ -349,6 +349,11 @@ export default function Ai() {
         your docs. An agent reviews, changes and sends it. Nothing is sent on its own, except on the topics your team
         switches to <a href="#autopilot">Autopilot</a> once their track record has earned it.
       </p>
+      <p>
+        AI also works before a ticket exists: it drafts the message when your product reports a problem on a
+        customer&apos;s account, writes an incident message for every customer a spike affects, and answers questions
+        in the portal. Those are on their own page, <Link href="/docs/proactive">Proactive and self-serve</Link>.
+      </p>
 
       <H2 id="set-it-up">Set it up</H2>
       <Steps>
@@ -423,6 +428,8 @@ export default function Ai() {
           { name: "knowledge", type: "KnowledgeSource[]", default: "[]", description: "What suggestions may answer from. See Knowledge." },
           { name: "actions", type: "SupportAction[]", default: "[]", description: "What AI may do in your product for the customer on the ticket. See Actions." },
           { name: "autopilot", type: "false | AutopilotOptions", description: "Thresholds, checks and limits for the topics your team lets answer on their own. Nothing is on until someone switches a topic on. false removes it. See Autopilot." },
+          { name: "proactive", type: "false | ProactiveOptions", description: <>Limits and thresholds for outreach from <code>support.signal()</code>. false switches signals off. See <Link href="/docs/proactive#signals">Proactive and self-serve</Link>.</> },
+          { name: "selfServe", type: "false | { maxPerHour?, maxQuestions?, quietHours? }", description: <>Caps for the portal&apos;s Ask box (20 questions a customer an hour, 8 a conversation), which answers nothing until your team switches it on in AI settings. false removes it. See <Link href="/docs/proactive#self-serve">Self-serve</Link>.</> },
           { name: "defer", type: "(work: Promise) => void", description: "Runs the model calls after the webhook has answered. Without it they run in the next runScheduled." },
           { name: "agentLanguage", type: "string", default: '"en"', description: "The language your agents read (BCP-47), for summaries, reasons and translations." },
           { name: "knowledgeBudget", type: "number", default: "120000", description: "Characters of knowledge a prompt may carry. Past it, only the articles closest to the conversation are sent." },
@@ -646,8 +653,9 @@ export default function Ai() {
           { name: "description", type: "string", required: true, description: "For the model: what it does and when to use it." },
           { name: "input", type: "schema", required: true, description: "A Zod schema, any Standard Schema, or the AI SDK's jsonSchema(). An object. It is what the model must fill in, what an agent's edits are checked against, and what the form is built from." },
           { name: "approval", type: '"always" | "never"', default: '"always"', description: '"never" is for read-only lookups: AI may run them on its own while drafting. Everything else waits for an agent.' },
+          { name: "portal", type: "boolean", default: "false", description: <>For lookups only: also lets the portal&apos;s <Link href="/docs/proactive#self-serve">Ask box</Link> run it, for the signed-in customer. <code>run</code> and <code>available</code> then get <code>ticket: null</code> and <code>contact: null</code>, since no ticket exists yet.</> },
           { name: "run", type: "({ input, ticket, customer, contact, agent, signal }) => { ok, summary, data? }", required: true, description: "Does it. summary is one line for the agent and the timeline; data is what a draft may quote. Answer ok: false when it didn't happen; throw only when you can't tell." },
-          { name: "available", type: "({ ticket, customer }) => boolean", description: "Whether it applies to this ticket: a plan, a status, a channel. Defaults to always." },
+          { name: "available", type: "({ ticket, customer }) => boolean", description: "Whether it applies to this ticket: a plan, a status, a channel. Defaults to always. ticket is null only for lookups marked portal: true." },
           { name: "timeoutMs", type: "number", default: "15000", description: "How long a run may take. After that the signal is aborted and the run is logged as timed out." },
         ]}
       />
@@ -825,7 +833,7 @@ export default function Ai() {
       </p>
       <Props
         rows={[
-          { name: "getSettings / updateSettings", type: "{ guidance, topics, draftOnArrival }", description: "Team guidance (up to 20,000 characters), up to 30 topics, and whether to suggest a reply as messages arrive (on by default)." },
+          { name: "getSettings / updateSettings", type: "{ guidance, topics, draftOnArrival, selfServe }", description: "Team guidance (up to 20,000 characters), up to 30 topics, whether to suggest a reply as messages arrive (on by default), and whether the portal's Ask box answers customers (off by default)." },
           { name: "syncKnowledge / listKnowledgeSources", type: "", description: "Sync every source now; list each source with its article count and last sync." },
           { name: "draft", type: "({ ticketId }) => Suggestion", description: "Suggest a reply now, for teams that turned suggestions on arrival off." },
           { name: "refine", type: "({ ticketId, text, instruction, language? }) => { text }", description: 'instruction is "shorter", "friendlier", "formal", "translate" or { custom }. Translate goes to the customer\'s language unless you pass one.' },
@@ -852,6 +860,10 @@ export default function Ai() {
           { name: "autopilotExamples", type: "({ topic, only?, limit? }) => AutopilotExample[]", description: 'A topic\'s recent drafts with how each ended, the text sent instead and the ticket. only: "changed" leaves out the ones that were right.' },
           { name: "holdAutopilotReply", type: "({ suggestionId, actorId })", description: "Stops a held reply. It stays on the ticket as a suggestion." },
           { name: "flagAutopilotReply", type: "({ suggestionId, actorId, note? })", description: "Marks a reply Autopilot sent as wrong: pauses its topic, reopens the ticket and files the question as a gap." },
+          { name: "draftOpening", type: "({ intent, customerId?, contactId?, channelId? }) => { subject, text, sources }", description: <>The first message of a conversation an agent starts, from one line of intent. Sends nothing. See <Link href="/docs/proactive#start-a-conversation">Start a conversation</Link>.</> },
+          { name: "listOutreach / sendOutreach / dismissOutreach / holdOutreach", type: "", description: <>The Outreach queue: messages proposed from signals, sent or dismissed by an agent (<code>actorId</code>). See <Link href="/docs/proactive#signals">Signals</Link>.</> },
+          { name: "getOutreachKinds / setOutreachKind", type: "", description: <>Each kind of outreach with its track record, and the switch that lets one send on its own. See <Link href="/docs/proactive#sending-on-its-own">Sending on its own</Link>.</> },
+          { name: "previewBroadcast / draftBroadcast / sendBroadcast", type: "", description: <>One message to every customer an acknowledged spike affects. See <Link href="/docs/proactive#broadcast">Incident broadcast</Link>.</> },
           { name: "setInsight", type: "({ ticketId, actorId, topic?, urgency? })", description: "An agent's correction. Kept on later messages and recorded on the timeline." },
         ]}
       />

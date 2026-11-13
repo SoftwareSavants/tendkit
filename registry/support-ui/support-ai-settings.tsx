@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { OutreachKinds } from "./outreach";
 import { useSupport } from "./provider";
 import type { ActionSetting, ApprovedAnswer, Gap, GuidanceSuggestion } from "./client";
 import { formatWhen } from "./format";
@@ -16,7 +17,7 @@ import { languageName } from "./ai";
 import { ApprovedAnswerDialog, ArticleDialog } from "./memory";
 import { AutopilotSettings } from "./autopilot";
 
-type Form = { guidance: string; topics: string[]; draftOnArrival: boolean };
+type Form = { guidance: string; topics: string[]; draftOnArrival: boolean; selfServe?: boolean };
 
 /**
  * Where a team tells AI how they answer: guidance, topics, whether to suggest replies, and what it
@@ -33,7 +34,9 @@ export function SupportAiSettings() {
 
   const saved = settings.data;
   useEffect(() => {
-    if (saved) setForm((current) => current ?? { guidance: saved.guidance, topics: saved.topics, draftOnArrival: saved.draftOnArrival });
+    if (saved) {
+      setForm((current) => current ?? { guidance: saved.guidance, topics: saved.topics, draftOnArrival: saved.draftOnArrival, ...(saved.selfServe === undefined ? {} : { selfServe: saved.selfServe }) });
+    }
   }, [saved]);
 
   const save = useMutation({
@@ -59,7 +62,10 @@ export function SupportAiSettings() {
   if (!saved || !form) return <Skeleton className="h-96 max-w-2xl" />;
 
   const dirty =
-    form.guidance.trim() !== saved.guidance.trim() || form.draftOnArrival !== saved.draftOnArrival || form.topics.join("\n") !== saved.topics.join("\n");
+    form.guidance.trim() !== saved.guidance.trim() ||
+    form.draftOnArrival !== saved.draftOnArrival ||
+    form.selfServe !== saved.selfServe ||
+    form.topics.join("\n") !== saved.topics.join("\n");
   const change = (patch: Partial<Form>) => {
     save.reset();
     setForm({ ...form, ...patch });
@@ -142,6 +148,18 @@ export function SupportAiSettings() {
         <Switch id="support-ai-arrival" checked={form.draftOnArrival} onCheckedChange={(checked) => change({ draftOnArrival: Boolean(checked) })} />
       </section>
 
+      {form.selfServe !== undefined && (
+        <section className="flex items-start justify-between gap-4">
+          <div className="space-y-1">
+            <label htmlFor="support-ai-self-serve" className="text-sm font-medium">
+              {t("ai.settings.selfServe")}
+            </label>
+            <p className="text-sm text-muted-foreground">{t("ai.settings.selfServeHelp")}</p>
+          </div>
+          <Switch id="support-ai-self-serve" checked={form.selfServe} onCheckedChange={(checked) => change({ selfServe: Boolean(checked) })} />
+        </section>
+      )}
+
       <div className="flex items-center gap-3">
         <Button type="button" disabled={!dirty || save.isPending} onClick={() => save.mutate({ ...form, guidance: form.guidance.trim() })}>
           {save.isPending && <Loader2 className="size-4 animate-spin" />}
@@ -189,6 +207,7 @@ export function SupportAiSettings() {
       </section>
 
       <AutopilotSettings />
+      <OutreachKinds />
       <Actions actions={saved.actions ?? []} />
       <ApprovedAnswers />
       <Gaps />

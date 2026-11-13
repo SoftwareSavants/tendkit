@@ -60,6 +60,8 @@ export function apiChannel(config: ApiChannelConfig): Channel {
       ...config.capabilities,
       // Receipts for delivered replies reach the delivering channel's webhook, not this channel.
       deliveryReceipts: false,
+      // It only receives: replies go out on the delivering channel.
+      canStartConversation: false,
     },
 
     async webhook(request) {

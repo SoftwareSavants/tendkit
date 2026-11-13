@@ -1,3 +1,4 @@
+import type { SelfServeStats } from "./proactive";
 import type { Agent, CustomerSummary, Mood, Urgency } from "./types";
 
 /**
@@ -105,7 +106,12 @@ export type Spike = {
 };
 
 /** A spike as the screens show it: who acknowledged it, and its latest tickets. */
-export type SpikeView = Omit<Spike, "acknowledgedBy"> & { acknowledgedBy: Agent | null; latest: TicketRef[] };
+export type SpikeView = Omit<Spike, "acknowledgedBy"> & {
+  acknowledgedBy: Agent | null;
+  latest: TicketRef[];
+  /** Customers written to about it with `sendBroadcast`. */
+  messaged: number;
+};
 
 export type SpikeConfig = {
   /** Different customers that must raise one topic within the window. */
@@ -149,6 +155,8 @@ export type AiInsights = {
   gaps: { id: string; theme: string; count: number; lastSeenAt: Date | null }[];
   /** Spikes detected in the period, newest first. */
   spikes: SpikeView[];
+  /** The portal's Ask box: conversations started in the period, and how many ended without a ticket. */
+  selfServe: { current: SelfServeStats; previous: SelfServeStats };
 };
 
 const emptyShare = (): DraftShare => ({ usedAsIs: 0, lightlyEdited: 0, rewritten: 0, discarded: 0, autopilotSent: 0, autopilotFlagged: 0 });

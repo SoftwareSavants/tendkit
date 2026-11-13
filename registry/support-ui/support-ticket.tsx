@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { buttonVariants } from "@/components/ui/button";
+import { NewTicketButton } from "./new-ticket-dialog";
 import { useSupport } from "./provider";
 import type { Agent, TicketAction, TicketDetail, TicketStatus, TimelineEvent, TimelineMessage } from "./client";
 import { contactLabel, formatTimestamp, formatWhen } from "./format";
@@ -307,6 +308,8 @@ function describeEvent(event: TimelineEvent, t: ReturnType<typeof useSupport>["t
       const said = t(status === "succeeded" ? "ticket.events.actionRan" : status === "failed" ? "ticket.events.actionFailed" : "ticket.events.actionUnconfirmed", { actor, title });
       return summary ? `${said}: ${summary}` : said;
     }
+    case "ticket_started":
+      return event.actorId ? t("ticket.events.started", { actor }) : t("ticket.events.startedAuto");
     case "autopilot_sent":
       return t("ai.autopilot.sentBy", { topic: String(event.data.topic ?? "") });
     case "autopilot_flagged":
@@ -471,6 +474,13 @@ function CustomerSidebar({ detail }: { detail: TicketDetail }) {
             </li>
           ))}
         </ul>
+        {/* A new conversation with the same person: something else to tell them, apart from this ticket. */}
+        {detail.contact.identities[0] && (
+          <NewTicketButton
+            className="mt-3"
+            start={{ customer: detail.customer, contact: { id: detail.contact.id, name: detail.contact.name, address: detail.contact.identities[0].value } }}
+          />
+        )}
         {!detail.customer && (
           <div className="mt-3 space-y-2">
             <UnknownSenderBadge />

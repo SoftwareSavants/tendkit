@@ -16,6 +16,8 @@ import { contactLabel, formatDuration, formatWhen, waitLevel } from "./format";
 import { AgentAvatar, UnknownSenderBadge } from "./parts";
 import { UrgencyMark } from "./ai";
 import { SpikeAlerts } from "./support-insights";
+import { NewTicketButton } from "./new-ticket-dialog";
+import { OutreachQueue } from "./outreach";
 
 const TABS: TicketStatus[] = ["open", "waiting", "solved"];
 const PAGE_SIZE = 25;
@@ -33,6 +35,9 @@ export function SupportInbox() {
   };
   const filters = { topic: params.get("topic"), channel: params.get("channel"), customer: params.get("customer"), from: date("from"), to: date("to") };
   const filtered = Boolean(filters.topic || filters.channel || filters.customer || filters.from || filters.to);
+  // Outreach is a queue of its own next to the ticket lists: messages waiting to be sent, not tickets yet.
+  const hasOutreach = Boolean(client.ai?.listOutreach);
+  const outreach = hasOutreach && !filtered && params.get("status") === "outreach";
   const status = (["open", "waiting", "solved", "spam", ...(filtered ? ["all"] : [])].includes(params.get("status") ?? "") ? params.get("status") : "open") as TicketStatus | "all";
   const assignee = params.get("assignee") ?? "any";
   const page = Math.max(1, Number(params.get("page")) || 1);
@@ -86,9 +91,17 @@ export function SupportInbox() {
       }),
     placeholderData: keepPreviousData,
     refetchInterval: 20_000,
+    enabled: !outreach,
   });
+  const proposals = useQuery({ queryKey: ["support", "ai", "outreach", "queue"], queryFn: () => client.ai!.listOutreach!(), enabled: hasOutreach, refetchInterval: 30_000 });
 
-  const tabs: (TicketStatus | "all")[] = [...(filtered ? ["all" as const] : []), ...TABS, ...(counts.data?.spam || status === "spam" ? ["spam" as const] : [])];
+  const tabs: (TicketStatus | "all" | "outreach")[] = [
+    ...(filtered ? ["all" as const] : []),
+    ...TABS,
+    ...(hasOutreach && !filtered ? ["outreach" as const] : []),
+    ...(counts.data?.spam || status === "spam" ? ["spam" as const] : []),
+  ];
+  const current = outreach ? "outreach" : status;
   const day = (value: Date) => value.toLocaleDateString(locale, { day: "numeric", month: "short" });
   const chips = [
     filters.topic && t("inbox.filters.topic", { value: filters.topic }),
@@ -127,21 +140,23 @@ export function SupportInbox() {
               key={tab}
               type="button"
               onClick={() => setParams({ status: tab === "open" ? null : tab })}
-              aria-pressed={tab === status}
+              aria-pressed={tab === current}
               className={cn(
                 "shrink-0 border-b-2 px-3 pb-2.5 text-sm font-medium transition-colors",
-                tab === status ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
+                tab === current ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"
               )}
             >
               {t(`status.${tab}`)}
               {/* The counts are the whole inbox's, so they'd mislead next to a filtered list. */}
-              {!filtered && tab !== "solved" && tab !== "all" && counts.data?.[tab] ? (
+              {tab === "outreach" ? (
+                proposals.data?.length ? <span className="ms-1.5 tabular-nums text-xs text-muted-foreground">{proposals.data.length}</span> : null
+              ) : !filtered && tab !== "solved" && tab !== "all" && counts.data?.[tab] ? (
                 <span className="ms-1.5 tabular-nums text-xs text-muted-foreground">{counts.data[tab]}</span>
               ) : null}
             </button>
           ))}
         </div>
-        <div className="flex flex-wrap items-center gap-2 pb-2">
+        <div className={cn("flex flex-wrap items-center gap-2 pb-2", outreach && "hidden")}>
           <div className="relative">
             <Search className="pointer-events-none absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -171,10 +186,13 @@ export function SupportInbox() {
                 ))}
             </SelectContent>
           </Select>
+          <NewTicketButton variant="default" className="h-9" />
         </div>
       </div>
 
-      {list.error ? (
+      {outreach ? (
+        <OutreachQueue />
+      ) : list.error ? (
         <div className="rounded-xl border bg-card px-4 py-12 text-center">
           <p className="text-sm text-destructive">{t("errors.load")}</p>
           <Button variant="outline" size="sm" className="mt-3" onClick={() => list.refetch()}>
@@ -213,7 +231,7 @@ export function SupportInbox() {
         </div>
       )}
 
-      {total > PAGE_SIZE && (
+      {!outreach && total > PAGE_SIZE && (
         <div className="flex items-center justify-end gap-2 text-sm text-muted-foreground">
           <span className="tabular-nums">{t("inbox.range", { from, to, total })}</span>
           <Button variant="outline" size="icon" className="size-8" disabled={page <= 1} onClick={() => setParams({ page: String(page - 1) })} aria-label={t("actions.previous")}>

@@ -144,6 +144,7 @@ export function resendChannel(config: ResendChannelConfig): Channel {
       conversation: "thread",
       replyWindowHours: null,
       deliveryReceipts: true,
+      canStartConversation: true,
     },
 
     async webhook(request) {

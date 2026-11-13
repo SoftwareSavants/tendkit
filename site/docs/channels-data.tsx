@@ -72,6 +72,7 @@ export const CHANNEL_DOCS: ChannelDoc[] = [
     notes: [
       <>Delivery, bounce and complaint events update each reply&apos;s status, and failures notify your team.</>,
       <>Threading headers are read from the raw message, so they work even when the API omits them.</>,
+      <>Your team can write first on it: <a href="/docs/proactive#start-a-conversation">New ticket</a> and outreach go out from the same address.</>,
     ],
   },
   {
@@ -137,6 +138,7 @@ export const CHANNEL_DOCS: ChannelDoc[] = [
     notes: [
       <>Replies your team sends from Outlook are recorded on the ticket from Sent Items. Junk Email is never read.</>,
       <>Mail goes out as the mailbox itself, so it uses the mailbox&apos;s display name rather than <code>fromName</code>.</>,
+      <>Your team can write first on it: <a href="/docs/proactive#start-a-conversation">New ticket</a> and outreach go out from the mailbox.</>,
     ],
   },
   {
@@ -194,7 +196,7 @@ export const CHANNEL_DOCS: ChannelDoc[] = [
       { name: "pubsub", type: "{ topic, audience?, serviceAccountEmail? }", description: "Push notifications. Without it the mailbox is polled only." },
       common.fetch,
     ],
-    notes: [<>Replies your team writes in Gmail show up on the ticket.</>, <>Each sync fetches up to 100 messages; the rest come next time.</>],
+    notes: [<>Replies your team writes in Gmail show up on the ticket.</>, <>Each sync fetches up to 100 messages; the rest come next time.</>, <>Your team can write first on it: <a href="/docs/proactive#start-a-conversation">New ticket</a> and outreach go out from the mailbox.</>],
   },
   {
     slug: "smtp",
@@ -239,7 +241,7 @@ export const CHANNEL_DOCS: ChannelDoc[] = [
       { name: "imap", type: "{ fetchSince(state) }", description: "Reads the inbox. Leave out when mail arrives another way." },
       { name: "replyAddress", type: "string", description: "An address that routes back to this mailbox, for the ticket token." },
     ],
-    notes: [<>Works with Fastmail, Zoho, cPanel hosting, or Gmail and Microsoft 365 with an app password.</>],
+    notes: [<>Works with Fastmail, Zoho, cPanel hosting, or Gmail and Microsoft 365 with an app password.</>, <>Your team can write first on it: <a href="/docs/proactive#start-a-conversation">New ticket</a> and outreach go out through your SMTP transport.</>],
   },
   {
     slug: "twilio",
@@ -282,6 +284,7 @@ export const CHANNEL_DOCS: ChannelDoc[] = [
     notes: [
       <>SMS: no attachments, 1,600 characters, billed per segment. Two-way SMS isn&apos;t available in every country; check Twilio&apos;s guidelines for yours.</>,
       <>WhatsApp: replies are allowed for 24 hours after the customer&apos;s last message. After that the composer explains why it can&apos;t send.</>,
+      <>Writing first: an SMS number can <a href="/docs/proactive#start-a-conversation">start a conversation</a>. A WhatsApp sender can&apos;t, since a first message needs an approved template, which this adapter doesn&apos;t send.</>,
     ],
   },
   {
@@ -326,6 +329,7 @@ export const CHANNEL_DOCS: ChannelDoc[] = [
     ],
     notes: [
       <>Replies are allowed for 24 hours after the customer&apos;s last message; this adapter doesn&apos;t send templates.</>,
+      <>For the same reason your team can&apos;t <a href="/docs/proactive#start-a-conversation">start a conversation</a> on it: the customer has to write first.</>,
       <>Reactions and system notices are ignored, so they never reopen a ticket.</>,
     ],
   },
@@ -358,7 +362,7 @@ export const CHANNEL_DOCS: ChannelDoc[] = [
       { name: "secretToken", type: "string", required: true, description: "The secret_token passed to setWebhook: 1 to 256 of A-Z, a-z, 0-9, _ and -." },
       { name: "botUsername", type: "string", required: true, description: 'Without the "@", for display.' },
     ],
-    notes: [<>Only private chats are handled. The bot can only write to people who messaged it first. Files up to 20 MB.</>],
+    notes: [<>Only private chats are handled. The bot can only write to people who messaged it first, so your team can&apos;t <a href="/docs/proactive#start-a-conversation">start a conversation</a> on it. Files up to 20 MB.</>],
   },
   {
     slug: "api",
@@ -409,6 +413,7 @@ await fetch("https://acme.com/api/webhooks/support/contact-form", {
     notes: [
       <>Resending the same message <code>id</code> is a no-op, so retries are safe.</>,
       <>API messages are untrusted: they never link to an account, so a form can&apos;t impersonate a customer.</>,
+      <>It only receives: your team can&apos;t <a href="/docs/proactive#start-a-conversation">start a conversation</a> on it. Use the delivering email channel for that.</>,
     ],
   },
 ];

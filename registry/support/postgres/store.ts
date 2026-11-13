@@ -65,6 +65,30 @@ export function createPostgresStore(db: Db): SupportStore {
       return rows.map((row) => toContact(row, identities.filter((i) => i.contactId === row.id)));
     },
 
+    async listContacts(query) {
+      const search = query.search?.trim().replace(/[\\%_]/g, "\\$&");
+      const rows = await db
+        .select({ id: supportContacts.id })
+        .from(supportContacts)
+        .where(
+          and(
+            query.customerId ? eq(supportContacts.customerId, query.customerId) : undefined,
+            query.userId ? eq(supportContacts.userId, query.userId) : undefined,
+            search
+              ? or(
+                  ilike(supportContacts.name, `%${search}%`),
+                  sql`exists (select 1 from ${supportContactIdentities} i where i.contact_id = ${supportContacts.id} and i.value like ${`%${search.toLowerCase()}%`})`
+                )
+              : undefined
+          )
+        )
+        .orderBy(desc(supportContacts.updatedAt), desc(supportContacts.id))
+        .limit(query.limit);
+      const contacts = await store.getContacts(rows.map((row) => row.id));
+      const order = new Map(rows.map((row, index) => [row.id, index]));
+      return contacts.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+    },
+
     async createContact(input) {
       const [row] = await db
         .insert(supportContacts)

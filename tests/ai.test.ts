@@ -511,7 +511,7 @@ describe("settings", () => {
     const t = await setupAi();
     const saved = await t.support.ai.updateSettings({ topics: [" Billing ", "billing", "Payouts", "", "Other"] });
     expect(saved.topics).toEqual(["billing", "Payouts"]);
-    expect(await t.support.ai.getSettings()).toEqual({ guidance: "Never promise a payout date we can't see.", topics: ["billing", "Payouts"], draftOnArrival: true });
+    expect(await t.support.ai.getSettings()).toEqual({ guidance: "Never promise a payout date we can't see.", selfServe: false, topics: ["billing", "Payouts"], draftOnArrival: true });
     await expect(t.support.ai.updateSettings({ guidance: "x".repeat(20_001) })).rejects.toThrow("under 20,000");
   });
 });

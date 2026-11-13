@@ -141,6 +141,7 @@ export type TimelineEvent = {
     | "forwarded"
     | "insight_changed"
     | "action_run"
+    | "ticket_started"
     | "autopilot_sent"
     | "autopilot_flagged";
   actorId: string | null;
@@ -252,6 +253,104 @@ export type Spike = {
   acknowledgedBy: Agent | null;
   /** Its latest tickets. */
   latest: TicketRef[];
+  /** Customers written to about it with a broadcast. */
+  messaged?: number;
+};
+
+/** Self-serve over a period: `deflected` is what Insights shows as questions answered before a ticket. */
+export type SelfServeStats = { conversations: number; answered: number; deflected: number; escalated: number; helpful: number; notHelpful: number };
+
+/** One of your channels, for choosing where a new conversation goes out. */
+export type StartChannel = {
+  id: string;
+  kind: string;
+  address: string;
+  /** Why your team can't write first on it, or null when it can. */
+  startBlockedReason: "needs_template" | "not_supported" | null;
+  /** The one a new conversation uses unless the agent picks another. */
+  default: boolean;
+  capabilities: { subject: boolean; attachments: { maxBytes: number; maxCount: number } | false; maxTextLength: number | null };
+};
+
+/** Someone the inbox knows, as a recipient of a new conversation. */
+export type Recipient = { id: string; name: string | null; identities: Identity[]; customer: Customer | null };
+
+/** `support.startTicket`'s input, without the agent: add your signed-in agent's id on the server. */
+export type StartTicketInput = {
+  channelId?: string;
+  to: { contactId: string } | { address: string; name?: string };
+  customerId?: string;
+  cc?: Address[];
+  subject?: string;
+  text: string;
+  attachmentIds?: string[];
+};
+
+/** Where a new conversation starts from: a customer, one of their people, or an address. */
+export type NewTicketStart = { customer?: Customer | null; contact?: { id: string; name: string | null; address: string } | null; address?: string };
+
+/** A message proposed from a signal, in the Outreach queue. */
+export type Outreach = {
+  id: string;
+  kind: string;
+  /** What your product reported. */
+  title: string;
+  facts: AccountFact[];
+  customer: Customer;
+  contact: { id: string; name: string | null; address: string | null } | null;
+  subject: string | null;
+  /** Null while it is being written, and when AI couldn't write it. */
+  text: string | null;
+  sources: SuggestionSource[];
+  language: string | null;
+  /** held: sends at `sendAt` unless someone stops it. failed: the channel didn't take it. */
+  status: "drafting" | "pending" | "held" | "sending" | "sent" | "dismissed" | "failed";
+  sendAt: DateLike | null;
+  /** Why a message of a kind that sends on its own waits for a person. */
+  autoBlock: "stopped" | "not_confident" | "unsourced" | "hourly_cap" | "held_back" | null;
+  lastError: string | null;
+  ticketId: string | null;
+  /** Sent with nobody reading it first. */
+  auto: boolean;
+  decidedBy: Agent | null;
+  drafted: boolean;
+  createdAt: DateLike;
+  decidedAt: DateLike | null;
+};
+
+/** One kind of outreach with its track record: the readiness view for sending on its own. */
+export type OutreachKind = {
+  kind: string;
+  /** The title of its latest signal. */
+  example: string | null;
+  stage: "collecting" | "eligible" | "on" | "paused";
+  enabledBy: Agent | null;
+  enabledAt: DateLike | null;
+  pausedAt: DateLike | null;
+  ready: boolean;
+  record: AutopilotRecord;
+};
+
+/** `support.ai.getOutreachKinds()`. */
+export type OutreachOverview = {
+  /** False when your code removed the switch: every message waits for an agent. */
+  autoSend: boolean;
+  /** Autopilot's kill switch is on: nothing sends on its own. */
+  stopped: boolean;
+  minDrafts: number;
+  minRate: number;
+  windowDays: number;
+  holdMinutes: number;
+  kinds: OutreachKind[];
+};
+
+/** `support.ai.previewBroadcast()`: who an incident message goes to. */
+export type BroadcastPreview = {
+  spikeId: string;
+  topic: string;
+  channel: { id: string; kind: string } | null;
+  recipients: { customer: Customer; contact: { id: string; name: string | null; address: string }; ticket: TicketRef }[];
+  skipped: { unlinked: number; alreadyMessaged: number; unreachable: number };
 };
 
 export type DraftShare = { usedAsIs: number; lightlyEdited: number; rewritten: number; discarded: number; autopilotSent: number; autopilotFlagged: number };
@@ -267,6 +366,8 @@ export type AiInsights = {
   firstReply: { withDraft: Distribution; withoutDraft: Distribution };
   gaps: { id: string; theme: string; count: number; lastSeenAt: DateLike | null }[];
   spikes: Spike[];
+  /** The portal's Ask box. Leave it out when you don't offer it. */
+  selfServe?: { current: SelfServeStats; previous: SelfServeStats };
 };
 
 export type RefineInstruction = "shorter" | "friendlier" | "formal" | "translate" | { custom: string };
@@ -279,6 +380,8 @@ export type AiSettings = {
   sources: { id: string; articles: number; syncedAt: DateLike | null }[];
   /** Your declared actions, from `ai.listActions()`. Leave it out when you have none. */
   actions?: ActionSetting[];
+  /** The portal's Ask box answers customers. Leave it out when you don't mount the portal: the switch is hidden. */
+  selfServe?: boolean;
 };
 
 /** An answer the team approved for reuse. Its text may hold {name}, {company} and {agent}, filled in when it's inserted. */
@@ -373,7 +476,7 @@ export interface SupportAiClient {
   discardSuggestion(input: { id: string }): Promise<unknown>;
   setInsight(input: { ticketId: string; topic?: string; urgency?: Urgency }): Promise<unknown>;
   getSettings(): Promise<AiSettings>;
-  updateSettings(input: Partial<Pick<AiSettings, "guidance" | "topics" | "draftOnArrival">>): Promise<unknown>;
+  updateSettings(input: Partial<Pick<AiSettings, "guidance" | "topics" | "draftOnArrival" | "selfServe">>): Promise<unknown>;
   syncKnowledge(): Promise<unknown>;
   /**
    * What the agent said, as text: send the recording to `support.ai.transcribe` on your server.
@@ -444,6 +547,31 @@ export interface SupportAiClient {
   /** `support.ai.listSpikes`: the ones nobody has acknowledged. */
   listSpikes?(): Promise<Spike[]>;
   acknowledgeSpike?(input: { id: string }): Promise<unknown>;
+
+  /*
+   * Proactive. `draftOpening` adds "Draft from a line" to the New ticket dialog. With
+   * `listOutreach` and `sendOutreach`, the inbox gets its Outreach queue; `getOutreachKinds` and
+   * `setOutreachKind` put each kind's readiness in AI settings; `previewBroadcast` and
+   * `sendBroadcast` add "Message customers" to a spike. Pass your signed-in agent's id as
+   * `actorId` on the server for each write.
+   */
+  /** `support.ai.draftOpening`: the first message of a new conversation, from one line of intent. */
+  draftOpening?(input: { intent: string; customerId?: string; contactId?: string; channelId?: string }): Promise<{ subject: string; text: string; sources: SuggestionSource[] }>;
+  /** `support.ai.listOutreach`: what waits for an agent, or with `sent`, what was sent or dismissed lately. */
+  listOutreach?(input?: { sent?: boolean }): Promise<Outreach[]>;
+  /** `support.ai.sendOutreach`: sends it as drafted, or with the agent's `subject` and `text`. */
+  sendOutreach?(input: { id: string; subject?: string; text?: string }): Promise<{ ticketId: string }>;
+  dismissOutreach?(input: { id: string }): Promise<unknown>;
+  /** `support.ai.holdOutreach`: stops a message that was about to send on its own. */
+  holdOutreach?(input: { id: string }): Promise<unknown>;
+  getOutreachKinds?(): Promise<OutreachOverview>;
+  /** `support.ai.setOutreachKind`: lets a kind send on its own (refused until it's ready), or takes that back. */
+  setOutreachKind?(input: { kind: string; on: boolean }): Promise<unknown>;
+  previewBroadcast?(input: { spikeId: string }): Promise<BroadcastPreview>;
+  /** `support.ai.draftBroadcast`: the incident message from one line of intent, with {name} and {company} in it. */
+  draftBroadcast?(input: { spikeId: string; intent: string }): Promise<{ subject: string; text: string }>;
+  /** `support.ai.sendBroadcast`: one ticket per affected customer, on this one approval. */
+  sendBroadcast?(input: { spikeId: string; subject: string; text: string }): Promise<{ recipients: number; sent: number; queued: number; failed: number }>;
 }
 
 export interface SupportClient {
@@ -470,6 +598,20 @@ export interface SupportClient {
   attachmentUrl(input: { id: string }): Promise<string>;
   listAgents(): Promise<Agent[]>;
   searchCustomers(query: string): Promise<Customer[]>;
+  /*
+   * Writing first. With `startTicket`, the inbox shows New ticket and a ticket's customer card
+   * shows Message; leave it off and both are hidden. `listChannels` lets the agent choose the
+   * channel and explains the ones that can't write first, `listContacts` finds people the inbox
+   * already knows, and `uploadForNewTicket` adds attachments.
+   */
+  /** `support.startTicket`, with your signed-in agent's id as `agentId` on the server. */
+  startTicket?(input: StartTicketInput): Promise<{ ticketId: string }>;
+  /** `support.listChannels()`. */
+  listChannels?(): Promise<StartChannel[]>;
+  /** `support.listContacts`: a customer's people, or the people matching a search. */
+  listContacts?(input: { customerId?: string; search?: string }): Promise<Recipient[]>;
+  /** `support.uploadAttachment` with `ticketId: null` and your agent's id as `uploadedBy`. */
+  uploadForNewTicket?(input: { file: File }): Promise<FileInfo>;
   /** `support.stats`: the numbers behind `SupportInsights`. Leave it off if you don't mount that screen. */
   stats?(input: { from: Date; to: Date; responseTargetMinutes: number }): Promise<SupportStats>;
   ai?: SupportAiClient;
@@ -496,10 +638,27 @@ export type PortalMessage = {
   attachments: FileInfo[];
 };
 
+/** What the Ask box answers with: an answer with its sources, or a hand-off to a person. */
+export type AskResult =
+  | { sessionId: string; kind: "answer"; text: string; sources: SuggestionSource[] }
+  | { sessionId: string | null; kind: "handoff"; reason: "cannot_answer" | "asked_for_human" | "blocked" | "limit" };
+
 export interface SupportPortalClient {
-  list(): Promise<{ items: PortalTicket[]; total: number }>;
+  /** `ask`: `support.portal.list` says whether your team switched instant answers on. */
+  list(): Promise<{ items: PortalTicket[]; total: number; ask?: boolean }>;
   get(id: string): Promise<{ ticket: { id: string; subject: string | null; status: TicketStatus; createdAt: DateLike }; messages: PortalMessage[] }>;
   create(input: { subject: string; text: string }): Promise<{ id: string }>;
   reply(input: { ticketId: string; text: string }): Promise<unknown>;
   attachmentUrl(input: { id: string }): Promise<string>;
+  /*
+   * The Ask box. Each calls `support.portal` on your server with the signed-in customer's
+   * `customerId` and `userId` from your session, never from the request. Leave them off and the
+   * portal has no Ask box.
+   */
+  /** `support.portal.ask`. Pass `sessionId` back to continue a conversation. */
+  ask?(input: { question: string; sessionId?: string | null }): Promise<AskResult>;
+  /** `support.portal.rateAnswer`: the customer's thumbs-up or thumbs-down. */
+  rateAnswer?(input: { sessionId: string; helpful: boolean }): Promise<unknown>;
+  /** `support.portal.escalate`: hands the conversation to your team as a request. `text` when the customer reworded it. */
+  escalate?(input: { sessionId: string; text?: string }): Promise<{ id: string }>;
 }

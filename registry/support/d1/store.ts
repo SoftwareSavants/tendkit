@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq, exists, gte, inArray, isNull, lt, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, exists, gte, inArray, isNull, like, lt, ne, or, sql, type SQL } from "drizzle-orm";
 import type { BaseSQLiteDatabase } from "drizzle-orm/sqlite-core";
 import type { SupportStore, TicketCounts } from "../store";
 import type { Attachment, Contact, Identity, Message, Ticket, TicketEvent } from "../types";
@@ -66,6 +66,30 @@ function buildStore(db: Db, created: Created | null): SupportStore {
       const rows = await db.select().from(supportContacts).where(inArray(supportContacts.id, ids));
       const identities = await db.select().from(supportContactIdentities).where(inArray(supportContactIdentities.contactId, ids));
       return rows.map((row) => toContact(row, identities.filter((i) => i.contactId === row.id)));
+    },
+
+    async listContacts(query) {
+      const search = query.search?.trim().replace(/[\\%_]/g, "\\$&");
+      const rows = await db
+        .select({ id: supportContacts.id })
+        .from(supportContacts)
+        .where(
+          and(
+            query.customerId ? eq(supportContacts.customerId, query.customerId) : undefined,
+            query.userId ? eq(supportContacts.userId, query.userId) : undefined,
+            search
+              ? or(
+                  like(supportContacts.name, `%${search}%`),
+                  sql`exists (select 1 from ${supportContactIdentities} i where i.contact_id = ${supportContacts.id} and i.value like ${`%${search.toLowerCase()}%`})`
+                )
+              : undefined
+          )
+        )
+        .orderBy(desc(supportContacts.updatedAt), desc(supportContacts.id))
+        .limit(query.limit);
+      const contacts = await store.getContacts(rows.map((row) => row.id));
+      const order = new Map(rows.map((row, index) => [row.id, index]));
+      return contacts.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
     },
 
     async createContact(input) {

@@ -96,6 +96,7 @@ export function smtpChannel(options: SmtpChannelOptions): Channel {
       conversation: "thread",
       replyWindowHours: null,
       deliveryReceipts: false,
+      canStartConversation: true,
     },
 
     ...(imap && {
